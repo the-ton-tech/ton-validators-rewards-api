@@ -54,12 +54,8 @@ func NewClientWithCachedConfig() (*liteapi.Client, error) {
 		}
 	}
 
-	nServers := len(conf.LiteServers)
-	maxConns := nServers
-	if maxConns > 10 {
-		maxConns = 10
-	}
-	log.Printf("connecting to %d/%d liteservers", maxConns, nServers)
+	maxConns := len(conf.LiteServers)
+	log.Printf("connecting to %d liteservers", maxConns)
 
 	return liteapi.NewClient(
 		liteapi.WithConfigurationFile(*conf),

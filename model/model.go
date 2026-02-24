@@ -38,6 +38,7 @@ type ValidatorEntry struct {
 	Share          float64          `json:"share"`
 	PerBlockReward uint64           `json:"per_block_reward"`
 	Pool           string           `json:"pool,omitempty"`
+	PoolType       string           `json:"pool_type,omitempty"`
 	Nominators     []NominatorEntry `json:"nominators,omitempty"`
 }
 
