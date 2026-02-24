@@ -1,4 +1,4 @@
-package service
+package model
 
 import (
 	"context"
@@ -20,8 +20,8 @@ func RPCCount(ctx context.Context) int64 {
 	return 0
 }
 
-// countRPC increments the RPC counter in ctx by 1.
-func countRPC(ctx context.Context) {
+// CountRPC increments the RPC counter in ctx by 1.
+func CountRPC(ctx context.Context) {
 	if c, ok := ctx.Value(rpcCounterKey{}).(*atomic.Int64); ok {
 		c.Add(1)
 	}

@@ -15,7 +15,17 @@ func main() {
 		log.Fatalf("client: %v", err)
 	}
 
-	mux := api.NewRouter(client)
+	svc := service.New(client)
+	apiSvc := api.NewService(svc)
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	mux.HandleFunc("GET /api/validators/{pubkey}", apiSvc.HandleValidatorByPubkey)
+	mux.HandleFunc("GET /api/validators", apiSvc.HandleValidators)
 
 	port := os.Getenv("PORT")
 	if port == "" {

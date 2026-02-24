@@ -14,50 +14,38 @@ import (
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 	"github.com/tonkeeper/tongo/utils"
+
+	"github.com/tonkeeper/validators-statistics/model"
 )
 
-// poolTypeCache caches pool type by address. Contract code never changes,
-// so a successful detection is cached indefinitely.
-var poolTypeCache sync.Map // ton.AccountID → string
+// poolTypeCache caches pool addresses known to be "Single Nominator"
+// so we skip the ListNominators RPC call on subsequent requests.
+// Nominator Pools are NOT cached because we need fresh nominator data each time.
+var poolTypeCache sync.Map // ton.AccountID → "Single Nominator"
 
-// detectPoolType determines the pool contract type by probing its get methods
-// and returns any nominator data found in the same call:
-//   - list_nominators exists → "Nominator Pool" + nominators
-//   - get_roles exists       → "Single Nominator"
-//   - neither                → "Other"
+// detectPoolType determines the pool contract type and returns nominator data.
+// Uses a single ListNominators call:
+//   - succeeds → "Nominator Pool" + nominators
+//   - fails    → "Single Nominator"
+//
+// Pool type is cached; nominator data is re-fetched each call.
 func detectPoolType(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *abi.ListNominatorsResult) {
+	// Fast path: known Single Nominator — skip the RPC call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
-		poolType := cached.(string)
-		if poolType == "Nominator Pool" {
-			// Re-fetch nominators (data changes per block, only type is cached).
-			countRPC(ctx)
-			if _, result, err := abi.ListNominators(ctx, executor, poolAddr); err == nil {
-				if noms, ok := result.(abi.ListNominatorsResult); ok {
-					return poolType, &noms
-				}
-			}
-		}
-		return poolType, nil
+		return cached.(string), nil
 	}
 
-	countRPC(ctx)
-	if _, result, err := abi.ListNominators(ctx, executor, poolAddr); err == nil {
+	model.CountRPC(ctx)
+	_, result, err := abi.ListNominators(ctx, executor, poolAddr)
+	if err == nil {
 		if noms, ok := result.(abi.ListNominatorsResult); ok {
-			poolTypeCache.Store(poolAddr, "Nominator Pool")
 			return "Nominator Pool", &noms
 		}
 	}
 
-	// get_roles is specific to Single Nominator contracts.
-	countRPC(ctx)
-	errCode, _, err := executor.RunSmcMethodByID(ctx, poolAddr, utils.MethodIdFromName("get_roles"), tlb.VmStack{})
-	if err == nil && errCode == 0 {
-		poolTypeCache.Store(poolAddr, "Single Nominator")
-		return "Single Nominator", nil
-	}
-
-	poolTypeCache.Store(poolAddr, "Other")
-	return "Other", nil
+	// Cache Single Nominator so we don't probe again.
+	poolTypeCache.Store(poolAddr, "Single Nominator")
+	return "Single Nominator", nil
 }
 
 // poolEntry holds a validator's pool address and true stake from the frozen election.
@@ -68,7 +56,7 @@ type poolEntry struct {
 
 // getAllPoolAddresses returns a map from validator pubkey to poolEntry.
 func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
-	countRPC(ctx)
+	model.CountRPC(ctx)
 	if list, err := elector.GetParticipantListExtended(ctx, electorAddr, client); err == nil && len(list.Validators) > 0 {
 		log.Printf("active election: id=%d, participants=%d, totalStake=%.2f TON",
 			list.ElectAt, len(list.Validators), float64(list.TotalStake)/1e9)
@@ -81,7 +69,7 @@ func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAdd
 // Frozen member value layout: src_addr (256 bits) | weight (64 bits) | true_stake (Grams) | banned (1 bit).
 // Elections are processed in ascending electAt order so the newest data for each pubkey wins.
 func poolsFromPastElections(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
-	countRPC(ctx)
+	model.CountRPC(ctx)
 	_, stack, err := client.RunSmcMethodByID(ctx, electorAddr, utils.MethodIdFromName("past_elections"), tlb.VmStack{})
 	if err != nil {
 		return nil, fmt.Errorf("past_elections: %w", err)

@@ -7,7 +7,20 @@ import (
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
+
+	"github.com/tonkeeper/validators-statistics/model"
 )
+
+// electorAddr is the well-known address of the TON elector contract (-1:333...333).
+var electorAddr = ton.AccountID{
+	Workchain: -1,
+	Address: [32]byte{
+		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+	},
+}
 
 // lookupMasterchainBlock resolves a seqno to a BlockIDExt and returns the block time.
 func lookupMasterchainBlock(ctx context.Context, client *liteapi.Client, seqno uint32) (ton.BlockIDExt, time.Time, error) {
@@ -16,7 +29,7 @@ func lookupMasterchainBlock(ctx context.Context, client *liteapi.Client, seqno u
 		Shard:     0x8000000000000000,
 		Seqno:     seqno,
 	}
-	countRPC(ctx)
+	model.CountRPC(ctx)
 	ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
 	if err != nil {
 		return ton.BlockIDExt{}, time.Time{}, err

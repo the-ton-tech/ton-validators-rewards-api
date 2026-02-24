@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 
@@ -16,20 +15,20 @@ import (
 )
 
 // FetchStats fetches validator statistics for the given seqno (or latest if nil).
-func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*model.Output, error) {
+func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output, error) {
 	// Resolve the target block: use provided seqno or fall back to latest.
 	var blockIDExt ton.BlockIDExt
 	var blockTime time.Time
 
 	if seqno != nil {
 		var err error
-		blockIDExt, blockTime, err = lookupMasterchainBlock(ctx, client, *seqno)
+		blockIDExt, blockTime, err = lookupMasterchainBlock(ctx, s.client, *seqno)
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock: %w", err)
 		}
 	} else {
-		countRPC(ctx)
-		info, err := client.GetMasterchainInfo(ctx)
+		model.CountRPC(ctx)
+		info, err := s.client.GetMasterchainInfo(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("GetMasterchainInfo: %w", err)
 		}
@@ -38,13 +37,13 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 			RootHash: ton.Bits256(info.Last.RootHash),
 			FileHash: ton.Bits256(info.Last.FileHash),
 		}
-		_, btime, err := lookupMasterchainBlock(ctx, client, info.Last.Seqno)
+		_, btime, err := lookupMasterchainBlock(ctx, s.client, info.Last.Seqno)
 		if err == nil {
 			blockTime = btime
 		}
 	}
 
-	pinned := client.WithBlock(blockIDExt)
+	pinned := s.client.WithBlock(blockIDExt)
 	log.Printf("block seqno=%d time=%s", blockIDExt.Seqno, blockTime.UTC().Format(time.RFC3339))
 
 	out := model.Output{
@@ -54,9 +53,9 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 		},
 	}
 
-	// Config params: 1=elector, 15=timing, 34=cur validators.
-	countRPC(ctx)
-	params, err := pinned.GetConfigParams(ctx, 0, []uint32{1, 15, 34})
+	// Config param 34: current validators.
+	model.CountRPC(ctx)
+	params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
 	if err != nil {
 		return nil, fmt.Errorf("GetConfigParams: %w (liteservers only retain state for recent blocks)", err)
 	}
@@ -65,27 +64,11 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 		return nil, fmt.Errorf("ConvertBlockchainConfig: %w", err)
 	}
 
-	electorAddr, ok := conf.ElectorAddr()
-	if !ok {
-		return nil, fmt.Errorf("elector address not found in config param 1")
-	}
-
 	// Validation round timing from config param 34.
 	roundSince, roundUntil := getRoundInfo(conf)
 	out.ValidationRound = model.RoundInfo{
 		Start: time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
 		End:   time.Unix(int64(roundUntil), 0).UTC().Format(time.RFC3339),
-	}
-
-	// Election timing from config param 15.
-	if conf.ConfigParam15 != nil {
-		p := conf.ConfigParam15
-		out.ElectionParams = model.ElectionParams{
-			ValidatorsElectedForSec: p.ValidatorsElectedFor,
-			ElectionsStartBeforeSec: p.ElectionsStartBefore,
-			ElectionsEndBeforeSec:   p.ElectionsEndBefore,
-			StakeHeldForSec:         p.StakeHeldFor,
-		}
 	}
 
 	// Current validators.
@@ -100,7 +83,7 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 
 	// Elector balance.
 	var electorBalance uint64
-	countRPC(ctx)
+	model.CountRPC(ctx)
 	if electorState, err := pinned.GetAccountState(ctx, electorAddr); err == nil {
 		electorBalance = uint64(electorState.Account.Account.Storage.Balance.Grams)
 		out.ElectorBalance = electorBalance
@@ -108,8 +91,8 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 
 	// Per-block reward = fees_collected from ValueFlow (confirmed to match balance diff).
 	var rewardPerBlock uint64
-	countRPC(ctx)
-	if block, err := client.GetBlock(ctx, blockIDExt); err == nil {
+	model.CountRPC(ctx)
+	if block, err := s.client.GetBlock(ctx, blockIDExt); err == nil {
 		rewardPerBlock = uint64(block.ValueFlow.FeesCollected.Grams)
 	}
 	out.RewardPerBlock = rewardPerBlock

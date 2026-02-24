@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,86 +9,80 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tonkeeper/tongo/liteapi"
-
-	"github.com/tonkeeper/validators-statistics/service"
+	"github.com/tonkeeper/validators-statistics/model"
 )
 
-// NewRouter registers all routes and returns the mux.
-func NewRouter(client *liteapi.Client) *http.ServeMux {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	mux.HandleFunc("GET /api/validators/{pubkey}", handleValidatorByPubkey(client))
-	mux.HandleFunc("GET /api/validators", handleValidators(client))
-
-	return mux
+// ValidatorService describes the methods the API layer needs from the service layer.
+type ValidatorService interface {
+	FetchStats(ctx context.Context, seqno *uint32) (*model.Output, error)
 }
 
-// handleValidators returns an HTTP handler for GET /api/validators.
-func handleValidators(client *liteapi.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		ctx := service.WithRPCCounter(r.Context())
-
-		seqno, err := parseSeqno(r)
-		if err != nil {
-			writeError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		out, err := service.FetchStats(ctx, client, seqno)
-		if err != nil {
-			log.Printf("FetchStats error: %v", err)
-			writeError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		elapsed := time.Since(start)
-		out.ResponseTimeMs = elapsed.Milliseconds()
-		log.Printf("GET /api/validators: %dms, %d RPC calls", elapsed.Milliseconds(), service.RPCCount(ctx))
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
-	}
+// Handler holds dependencies for HTTP handlers.
+type Service struct {
+	svc ValidatorService
 }
 
-// handleValidatorByPubkey returns an HTTP handler for GET /api/validators/{pubkey}.
-func handleValidatorByPubkey(client *liteapi.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		ctx := service.WithRPCCounter(r.Context())
-		pubkey := r.PathValue("pubkey")
+// NewHandler creates a Handler with the given service.
+func NewService(svc ValidatorService) *Service {
+	return &Service{svc: svc}
+}
 
-		seqno, err := parseSeqno(r)
-		if err != nil {
-			writeError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+// handleValidators handles GET /api/validators.
+func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := model.WithRPCCounter(r.Context())
 
-		out, err := service.FetchStats(ctx, client, seqno)
-		if err != nil {
-			log.Printf("FetchStats error: %v", err)
-			writeError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		for _, v := range out.Validators {
-			if v.Pubkey == pubkey {
-				elapsed := time.Since(start)
-				v.ResponseTimeMs = elapsed.Milliseconds()
-				log.Printf("GET /api/validators/%s: %dms, %d RPC calls", pubkey, elapsed.Milliseconds(), service.RPCCount(ctx))
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(v)
-				return
-			}
-		}
-
-		writeError(w, fmt.Sprintf("validator %q not found", pubkey), http.StatusNotFound)
+	seqno, err := parseSeqno(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+
+	out, err := h.svc.FetchStats(ctx, seqno)
+	if err != nil {
+		log.Printf("FetchStats error: %v", err)
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	elapsed := time.Since(start)
+	out.ResponseTimeMs = elapsed.Milliseconds()
+	log.Printf("GET /api/validators: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleValidatorByPubkey handles GET /api/validators/{pubkey}.
+func (h *Service) HandleValidatorByPubkey(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := model.WithRPCCounter(r.Context())
+	pubkey := r.PathValue("pubkey")
+
+	seqno, err := parseSeqno(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	out, err := h.svc.FetchStats(ctx, seqno)
+	if err != nil {
+		log.Printf("FetchStats error: %v", err)
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, v := range out.Validators {
+		if v.Pubkey == pubkey {
+			elapsed := time.Since(start)
+			v.ResponseTimeMs = elapsed.Milliseconds()
+			log.Printf("GET /api/validators/%s: %dms, %d RPC calls", pubkey, elapsed.Milliseconds(), model.RPCCount(ctx))
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(v)
+			return
+		}
+	}
+
+	writeError(w, fmt.Sprintf("validator %q not found", pubkey), http.StatusNotFound)
 }
 
 // writeError writes a structured JSON error response.

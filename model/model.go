@@ -6,7 +6,6 @@ type Output struct {
 	ResponseTimeMs  int64            `json:"response_time_ms"`
 	Block           BlockInfo        `json:"block"`
 	ValidationRound RoundInfo        `json:"validation_round"`
-	ElectionParams  ElectionParams   `json:"election_params"`
 	ElectorBalance  uint64           `json:"elector_balance"`
 	TotalStake      uint64           `json:"total_stake"`
 	RewardPerBlock  uint64           `json:"reward_per_block"`
@@ -21,13 +20,6 @@ type BlockInfo struct {
 type RoundInfo struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
-}
-
-type ElectionParams struct {
-	ValidatorsElectedForSec uint32 `json:"validators_elected_for_sec"`
-	ElectionsStartBeforeSec uint32 `json:"elections_start_before_sec"`
-	ElectionsEndBeforeSec   uint32 `json:"elections_end_before_sec"`
-	StakeHeldForSec         uint32 `json:"stake_held_for_sec"`
 }
 
 type ValidatorEntry struct {

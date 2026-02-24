@@ -46,12 +46,6 @@ Response:
     "start": "2026-02-20T12:09:44Z",
     "end": "2026-02-21T06:22:00Z"
   },
-  "election_params": {
-    "validators_elected_for_sec": 65536,
-    "elections_start_before_sec": 32768,
-    "elections_end_before_sec": 8192,
-    "stake_held_for_sec": 32768
-  },
   "elector_balance": 966674188286983322,
   "total_stake": 457752122739238021,
   "reward_per_block": 2928989965,
@@ -106,7 +100,7 @@ main → api → service → model
 
 1. Connects to TON liteservers using the global config
 2. Resolves the target masterchain block (latest or by seqno)
-3. Reads config params 1 (elector address), 15 (election timing), and 34 (current validators)
+3. Reads config params 1 (elector address) and 34 (current validators)
 4. Calls the elector's `past_elections` method to get pool addresses and true stakes
 5. Fetches nominator lists for each pool in parallel (up to 20 concurrent RPC calls)
 6. Returns the assembled JSON response
