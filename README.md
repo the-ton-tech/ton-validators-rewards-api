@@ -15,7 +15,14 @@ The server listens on port `8080` by default. Override with the `PORT` environme
 PORT=3000 ./validators-statistics
 ```
 
-On first launch the TON global config is downloaded and cached to `/tmp/ton-global-config.json` for 7 days. The client connects to up to 10 liteservers in parallel.
+### Docker
+
+```bash
+docker build -t validators-statistics .
+docker run -p 8080:8080 validators-statistics
+```
+
+On first launch the TON global config is downloaded and cached to `/tmp/ton-global-config.json` for 7 days. The client connects to all available liteservers in parallel.
 
 ## API
 
@@ -29,9 +36,10 @@ Returns all current validators with stakes, rewards, pool addresses, and nominat
 
 Query parameters:
 
-| Parameter | Type   | Description                                      |
-|-----------|--------|--------------------------------------------------|
-| `seqno`   | uint32 | Masterchain block seqno (defaults to latest)     |
+| Parameter    | Type   | Description                                      |
+|--------------|--------|--------------------------------------------------|
+| `seqno`      | uint32 | Masterchain block seqno (defaults to latest)     |
+| `nominators` | string | Set to `false` to skip nominator data            |
 
 Response:
 
@@ -75,34 +83,39 @@ Response:
 
 Returns a single validator entry by hex public key.
 
-Query parameters: same as above (`seqno`).
+Query parameters: same as above (`seqno`, `nominators`).
 
 ## Project structure
 
 ```
-main.go              Entry point
-model/model.go       JSON response types
-service/client.go    TON lite client initialization + config caching
-service/stats.go     FetchStats() — core data-fetching orchestrator
-service/pool.go      Pool detection, past_elections parsing, hashmap traversal
-service/blockchain.go Block lookup, round info, validator extraction
-service/rpccount.go  Per-request RPC call counter
-api/handler.go       HTTP handlers and router
+main.go                Entry point — wires service and API layers
+model/model.go         JSON response types
+model/rpccount.go      Per-request RPC call counter (context-based)
+service/service.go     Service struct with DI for liteapi client
+service/client.go      TON lite client initialization + config caching
+service/stats.go       FetchStats() — core data-fetching orchestrator
+service/pool.go        Pool detection, past_elections parsing
+service/blockchain.go  Block lookup, round info, validator extraction
+api/handler.go         HTTP handlers, ValidatorService interface
+Dockerfile             Multi-stage build (scratch)
 ```
 
 Dependency graph (no cycles):
 
 ```
-main → api → service → model
+main → api     → model
+     → service → model
 ```
+
+`api` depends on `service` only through the `ValidatorService` interface (DI).
 
 ## How it works
 
 1. Connects to TON liteservers using the global config
 2. Resolves the target masterchain block (latest or by seqno)
-3. Reads config params 1 (elector address) and 34 (current validators)
-4. Calls the elector's `past_elections` method to get pool addresses and true stakes
-5. Fetches nominator lists for each pool in parallel (up to 20 concurrent RPC calls)
+3. Fetches in parallel: config param 34 (validators), past elections (pool addresses + stakes), elector balance, and block reward
+4. Past elections data is cached by election IDs — reparsed only when elections change
+5. Optionally fetches nominator lists for each pool in parallel (up to 100 concurrent RPC calls)
 6. Returns the assembled JSON response
 
 All values (stakes, balances, rewards) are in nanoTON.

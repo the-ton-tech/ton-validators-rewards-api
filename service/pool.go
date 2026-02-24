@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"sync"
 
 	"github.com/tonkeeper/tongo/abi"
-	"github.com/tonkeeper/tongo/boc"
 	"github.com/tonkeeper/tongo/contract/elector"
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
@@ -22,6 +22,12 @@ import (
 // so we skip the ListNominators RPC call on subsequent requests.
 // Nominator Pools are NOT cached because we need fresh nominator data each time.
 var poolTypeCache sync.Map // ton.AccountID → "Single Nominator"
+
+var pastElectionsCache struct {
+	sync.Mutex
+	electionIDs []int64 // sorted electAt values used as cache key
+	data        map[tlb.Bits256]poolEntry
+}
 
 // detectPoolType determines the pool contract type and returns nominator data.
 // Uses a single ListNominators call:
@@ -46,6 +52,14 @@ func detectPoolType(ctx context.Context, executor abi.Executor, poolAddr ton.Acc
 	// Cache Single Nominator so we don't probe again.
 	poolTypeCache.Store(poolAddr, "Single Nominator")
 	return "Single Nominator", nil
+}
+
+// frozenMember matches the TL-B layout of a member in past_elections hashmap:
+// src_addr:bits256 weight:uint64 true_stake:Grams banned:Bool
+type frozenMember struct {
+	SrcAddr   tlb.Bits256
+	Weight    tlb.Uint64
+	TrueStake tlb.Grams
 }
 
 // poolEntry holds a validator's pool address and true stake from the frozen election.
@@ -87,11 +101,13 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 		return nil, fmt.Errorf("RecursiveToSlice: %w", err)
 	}
 
-	type electionData struct {
+	// Extract election IDs (cheap) and check cache.
+	type rawElection struct {
 		electAt int64
-		leaves  map[tlb.Bits256]*boc.Cell
+		fields  []tlb.VmStackValue
 	}
-	var allElections []electionData
+	parsed := make([]rawElection, 0, len(elections))
+	ids := make([]int64, 0, len(elections))
 	for _, el := range elections {
 		elTuple := el.VmStkTuple
 		fields, err := elTuple.Data.RecursiveToSlice(int(elTuple.Len))
@@ -99,141 +115,55 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 			continue
 		}
 		electAt := fields[0].VmStkTinyInt
-		membersCell := &fields[4].VmStkCell.Value
-		leaves := make(map[tlb.Bits256]*boc.Cell)
-		traverseHashmap(256, membersCell, nil, leaves)
-		log.Printf("past election id=%d: %d members", electAt, len(leaves))
-		allElections = append(allElections, electionData{electAt: electAt, leaves: leaves})
+		ids = append(ids, electAt)
+		parsed = append(parsed, rawElection{electAt: electAt, fields: fields})
+	}
+	slices.Sort(ids)
+
+	pastElectionsCache.Lock()
+	if slices.Equal(ids, pastElectionsCache.electionIDs) && pastElectionsCache.data != nil {
+		cached := pastElectionsCache.data
+		pastElectionsCache.Unlock()
+		log.Printf("past elections: cache hit (ids=%v)", ids)
+		return cached, nil
+	}
+	pastElectionsCache.Unlock()
+
+	// Cache miss — full parse of member hashmaps.
+	type electionData struct {
+		electAt int64
+		members tlb.Hashmap[tlb.Bits256, frozenMember]
+	}
+	var allElections []electionData
+	for _, pe := range parsed {
+		membersCell := &pe.fields[4].VmStkCell.Value
+		var members tlb.Hashmap[tlb.Bits256, frozenMember]
+		if err := tlb.Unmarshal(membersCell, &members); err != nil {
+			log.Printf("warning: parse members for election %d: %v", pe.electAt, err)
+			continue
+		}
+		log.Printf("past election id=%d: %d members", pe.electAt, len(members.Keys()))
+		allElections = append(allElections, electionData{electAt: pe.electAt, members: members})
 	}
 
-	// Sort ascending so the newest election is processed last and wins (last-write-wins).
 	sort.Slice(allElections, func(i, j int) bool {
 		return allElections[i].electAt < allElections[j].electAt
 	})
 
 	merged := make(map[tlb.Bits256]poolEntry)
 	for _, ed := range allElections {
-		for pubkey, leaf := range ed.leaves {
-			if leaf.BitsAvailableForRead() < 256 {
-				continue
+		for _, item := range ed.members.Items() {
+			merged[item.Key] = poolEntry{
+				Addr:      ton.AccountID{Workchain: -1, Address: [32]byte(item.Value.SrcAddr)},
+				TrueStake: uint64(item.Value.TrueStake),
 			}
-			// src_addr: 256 bits
-			var addrBytes [32]byte
-			for i := range addrBytes {
-				b, _ := leaf.ReadUint(8)
-				addrBytes[i] = byte(b)
-			}
-			entry := poolEntry{Addr: ton.AccountID{Workchain: -1, Address: addrBytes}}
-			// skip weight (64 bits)
-			if leaf.BitsAvailableForRead() >= 64 {
-				leaf.ReadUint(64) //nolint:errcheck
-			}
-			// true_stake: Grams = 4-bit length L, then L*8 bits of value
-			if leaf.BitsAvailableForRead() >= 4 {
-				gramsLen, err := leaf.ReadUint(4)
-				if err == nil && gramsLen > 0 && leaf.BitsAvailableForRead() >= int(gramsLen)*8 {
-					v, err := leaf.ReadUint(int(gramsLen) * 8)
-					if err == nil {
-						entry.TrueStake = v
-					}
-				}
-			}
-			merged[pubkey] = entry
 		}
 	}
+
+	pastElectionsCache.Lock()
+	pastElectionsCache.electionIDs = ids
+	pastElectionsCache.data = merged
+	pastElectionsCache.Unlock()
+
 	return merged, nil
-}
-
-// traverseHashmap recursively visits every leaf of a TL-B Hashmap.
-func traverseHashmap(keyBitsLeft int, c *boc.Cell, prefix []bool, out map[tlb.Bits256]*boc.Cell) {
-	first, err := c.ReadBit()
-	if err != nil {
-		return
-	}
-
-	var label []bool
-	if !first {
-		// hml_short: unary-encoded label length.
-		n, err := c.ReadUnary()
-		if err != nil {
-			return
-		}
-		for i := 0; i < int(n); i++ {
-			b, err := c.ReadBit()
-			if err != nil {
-				return
-			}
-			label = append(label, b)
-		}
-	} else {
-		second, err := c.ReadBit()
-		if err != nil {
-			return
-		}
-		if !second {
-			// hml_long: explicit length then individual bits.
-			n, err := c.ReadLimUint(keyBitsLeft)
-			if err != nil {
-				return
-			}
-			for i := 0; i < int(n); i++ {
-				b, err := c.ReadBit()
-				if err != nil {
-					return
-				}
-				label = append(label, b)
-			}
-		} else {
-			// hml_same: one repeated bit value.
-			bitVal, err := c.ReadBit()
-			if err != nil {
-				return
-			}
-			n, err := c.ReadLimUint(keyBitsLeft)
-			if err != nil {
-				return
-			}
-			for i := 0; i < int(n); i++ {
-				label = append(label, bitVal)
-			}
-		}
-	}
-
-	currentKey := make([]bool, len(prefix)+len(label))
-	copy(currentKey, prefix)
-	copy(currentKey[len(prefix):], label)
-	keyBitsLeft -= len(label)
-
-	if keyBitsLeft == 0 {
-		if len(currentKey) != 256 {
-			return
-		}
-		var key tlb.Bits256
-		for i, b := range currentKey {
-			if b {
-				key[i/8] |= 1 << (7 - uint(i%8))
-			}
-		}
-		out[key] = c
-		return
-	}
-
-	left, err := c.NextRef()
-	if err != nil {
-		return
-	}
-	right, err := c.NextRef()
-	if err != nil {
-		return
-	}
-
-	leftKey := make([]bool, len(currentKey)+1)
-	copy(leftKey, currentKey)
-	leftKey[len(currentKey)] = false
-	traverseHashmap(keyBitsLeft-1, left, leftKey, out)
-
-	rightKey := make([]bool, len(currentKey)+1)
-	copy(rightKey, currentKey)
-	rightKey[len(currentKey)] = true
-	traverseHashmap(keyBitsLeft-1, right, rightKey, out)
 }
