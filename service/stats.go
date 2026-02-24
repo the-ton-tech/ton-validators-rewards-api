@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tonkeeper/tongo/abi"
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
@@ -179,45 +178,33 @@ func FetchStats(ctx context.Context, client *liteapi.Client, seqno *uint32) (*mo
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			// Detect pool type via cascade: try ListNominators (Nominator Pool),
-			// then GetPoolStatus (Whales Pool), else assume Single Nominator.
-			countRPC(ctx)
-			_, result, err := abi.ListNominators(ctx, pinned, poolAddr)
-			if err == nil {
-				if nominators, ok := result.(abi.ListNominatorsResult); ok {
-					entries[idx].PoolType = "Nominator Pool"
-					var totalAmount uint64
-					for _, n := range nominators.Nominators {
-						totalAmount += uint64(n.Amount)
-					}
-					for _, n := range nominators.Nominators {
-						addr := ton.AccountID{Workchain: -1, Address: tlb.Bits256(n.Address)}
-						var nomShare float64
-						var nomPerBlock, nomStaked uint64
-						if totalAmount > 0 {
-							nomShare = float64(n.Amount) / float64(totalAmount)
-							nomPerBlock = uint64(float64(rows[idx].perBlockNT) * float64(n.Amount) / float64(totalAmount))
-							nomStaked = uint64(float64(rows[idx].trueStake) * float64(n.Amount) / float64(totalAmount))
-						}
-						entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
-							Address:        addr.ToHuman(true, false),
-							Share:          nomShare,
-							PerBlockReward: nomPerBlock,
-							Staked:         nomStaked,
-							PoolBalance:    uint64(n.Amount),
-						})
-					}
-					return
-				}
-			}
+			poolType, nominators := detectPoolType(ctx, pinned, poolAddr)
+			entries[idx].PoolType = poolType
 
-			countRPC(ctx)
-			if _, _, err := abi.GetPoolStatus(ctx, pinned, poolAddr); err == nil {
-				entries[idx].PoolType = "Whales Pool"
+			if nominators == nil {
 				return
 			}
-
-			entries[idx].PoolType = "Single Nominator"
+			var totalAmount uint64
+			for _, n := range nominators.Nominators {
+				totalAmount += uint64(n.Amount)
+			}
+			for _, n := range nominators.Nominators {
+				addr := ton.AccountID{Workchain: -1, Address: tlb.Bits256(n.Address)}
+				var nomShare float64
+				var nomPerBlock, nomStaked uint64
+				if totalAmount > 0 {
+					nomShare = float64(n.Amount) / float64(totalAmount)
+					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * float64(n.Amount) / float64(totalAmount))
+					nomStaked = uint64(float64(rows[idx].trueStake) * float64(n.Amount) / float64(totalAmount))
+				}
+				entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
+					Address:        addr.ToHuman(true, false),
+					Share:          nomShare,
+					PerBlockReward: nomPerBlock,
+					Staked:         nomStaked,
+					PoolBalance:    uint64(n.Amount),
+				})
+			}
 		}(i, *row.poolAddr)
 	}
 	wg.Wait()

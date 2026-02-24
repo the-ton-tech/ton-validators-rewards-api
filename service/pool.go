@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync"
 
+	"github.com/tonkeeper/tongo/abi"
 	"github.com/tonkeeper/tongo/boc"
 	"github.com/tonkeeper/tongo/contract/elector"
 	"github.com/tonkeeper/tongo/liteapi"
@@ -13,6 +15,50 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 	"github.com/tonkeeper/tongo/utils"
 )
+
+// poolTypeCache caches pool type by address. Contract code never changes,
+// so a successful detection is cached indefinitely.
+var poolTypeCache sync.Map // ton.AccountID → string
+
+// detectPoolType determines the pool contract type by probing its get methods
+// and returns any nominator data found in the same call:
+//   - list_nominators exists → "Nominator Pool" + nominators
+//   - get_roles exists       → "Single Nominator"
+//   - neither                → "Other"
+func detectPoolType(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *abi.ListNominatorsResult) {
+	if cached, ok := poolTypeCache.Load(poolAddr); ok {
+		poolType := cached.(string)
+		if poolType == "Nominator Pool" {
+			// Re-fetch nominators (data changes per block, only type is cached).
+			countRPC(ctx)
+			if _, result, err := abi.ListNominators(ctx, executor, poolAddr); err == nil {
+				if noms, ok := result.(abi.ListNominatorsResult); ok {
+					return poolType, &noms
+				}
+			}
+		}
+		return poolType, nil
+	}
+
+	countRPC(ctx)
+	if _, result, err := abi.ListNominators(ctx, executor, poolAddr); err == nil {
+		if noms, ok := result.(abi.ListNominatorsResult); ok {
+			poolTypeCache.Store(poolAddr, "Nominator Pool")
+			return "Nominator Pool", &noms
+		}
+	}
+
+	// get_roles is specific to Single Nominator contracts.
+	countRPC(ctx)
+	errCode, _, err := executor.RunSmcMethodByID(ctx, poolAddr, utils.MethodIdFromName("get_roles"), tlb.VmStack{})
+	if err == nil && errCode == 0 {
+		poolTypeCache.Store(poolAddr, "Single Nominator")
+		return "Single Nominator", nil
+	}
+
+	poolTypeCache.Store(poolAddr, "Other")
+	return "Other", nil
+}
 
 // poolEntry holds a validator's pool address and true stake from the frozen election.
 type poolEntry struct {
