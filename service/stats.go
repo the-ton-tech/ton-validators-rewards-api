@@ -15,10 +15,13 @@ import (
 )
 
 // FetchStats fetches validator statistics for the given seqno (or latest if nil).
-func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output, error) {
+func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error) {
 	// Resolve the target block: use provided seqno or fall back to latest.
 	var blockIDExt ton.BlockIDExt
 	var blockTime time.Time
+
+	// needBlockTime: for seqno=nil we defer LookupBlock to the parallel group.
+	var needBlockTime bool
 
 	if seqno != nil {
 		var err error
@@ -37,13 +40,86 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output,
 			RootHash: ton.Bits256(info.Last.RootHash),
 			FileHash: ton.Bits256(info.Last.FileHash),
 		}
-		_, btime, err := lookupMasterchainBlock(ctx, s.client, info.Last.Seqno)
-		if err == nil {
-			blockTime = btime
-		}
+		needBlockTime = true
 	}
 
 	pinned := s.client.WithBlock(blockIDExt)
+
+	// Fetch independent data in parallel.
+	var (
+		fetchWg        sync.WaitGroup
+		conf           *ton.BlockchainConfig
+		confErr        error
+		pools          map[tlb.Bits256]poolEntry
+		electorBalance uint64
+		rewardPerBlock uint64
+	)
+
+	fetchWg.Add(4)
+
+	// Block time (only when seqno was nil — deferred from block resolution).
+	if needBlockTime {
+		fetchWg.Add(1)
+		go func() {
+			defer fetchWg.Done()
+			_, btime, err := lookupMasterchainBlock(ctx, s.client, blockIDExt.Seqno)
+			if err == nil {
+				blockTime = btime
+			}
+		}()
+	}
+
+	// Config param 34: current validators.
+	go func() {
+		defer fetchWg.Done()
+		model.CountRPC(ctx)
+		params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
+		if err != nil {
+			confErr = fmt.Errorf("GetConfigParams: %w (liteservers only retain state for recent blocks)", err)
+			return
+		}
+		c, _, err := ton.ConvertBlockchainConfig(params, true)
+		if err != nil {
+			confErr = fmt.Errorf("ConvertBlockchainConfig: %w", err)
+			return
+		}
+		conf = c
+	}()
+
+	// Pool addresses and true stakes from past_elections.
+	go func() {
+		defer fetchWg.Done()
+		p, err := getAllPoolAddresses(ctx, pinned, electorAddr)
+		if err != nil {
+			log.Printf("warning: pool addresses: %v", err)
+		}
+		pools = p
+	}()
+
+	// Elector balance.
+	go func() {
+		defer fetchWg.Done()
+		model.CountRPC(ctx)
+		if st, err := pinned.GetAccountState(ctx, electorAddr); err == nil {
+			electorBalance = uint64(st.Account.Account.Storage.Balance.Grams)
+		}
+	}()
+
+	// Per-block reward = fees_collected from ValueFlow.
+	go func() {
+		defer fetchWg.Done()
+		model.CountRPC(ctx)
+		if block, err := s.client.GetBlock(ctx, blockIDExt); err == nil {
+			rewardPerBlock = uint64(block.ValueFlow.FeesCollected.Grams)
+		}
+	}()
+
+	fetchWg.Wait()
+
+	if confErr != nil {
+		return nil, confErr
+	}
+
 	log.Printf("block seqno=%d time=%s", blockIDExt.Seqno, blockTime.UTC().Format(time.RFC3339))
 
 	out := model.Output{
@@ -51,17 +127,8 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output,
 			Seqno: blockIDExt.Seqno,
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
-	}
-
-	// Config param 34: current validators.
-	model.CountRPC(ctx)
-	params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
-	if err != nil {
-		return nil, fmt.Errorf("GetConfigParams: %w (liteservers only retain state for recent blocks)", err)
-	}
-	conf, _, err := ton.ConvertBlockchainConfig(params, true)
-	if err != nil {
-		return nil, fmt.Errorf("ConvertBlockchainConfig: %w", err)
+		ElectorBalance: electorBalance,
+		RewardPerBlock: rewardPerBlock,
 	}
 
 	// Validation round timing from config param 34.
@@ -74,28 +141,6 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output,
 	// Current validators.
 	validators := extractValidators(conf)
 	log.Printf("active validators: %d", len(validators))
-
-	// Pool addresses and true stakes from past_elections.
-	pools, err := getAllPoolAddresses(ctx, pinned, electorAddr)
-	if err != nil {
-		log.Printf("warning: pool addresses: %v", err)
-	}
-
-	// Elector balance.
-	var electorBalance uint64
-	model.CountRPC(ctx)
-	if electorState, err := pinned.GetAccountState(ctx, electorAddr); err == nil {
-		electorBalance = uint64(electorState.Account.Account.Storage.Balance.Grams)
-		out.ElectorBalance = electorBalance
-	}
-
-	// Per-block reward = fees_collected from ValueFlow (confirmed to match balance diff).
-	var rewardPerBlock uint64
-	model.CountRPC(ctx)
-	if block, err := s.client.GetBlock(ctx, blockIDExt); err == nil {
-		rewardPerBlock = uint64(block.ValueFlow.FeesCollected.Grams)
-	}
-	out.RewardPerBlock = rewardPerBlock
 
 	// Total true stake: sum only for current active validators.
 	var totalTrueStake uint64
@@ -151,7 +196,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32) (*model.Output,
 			Pool:           row.pool,
 		}
 
-		if row.poolAddr == nil {
+		if row.poolAddr == nil || !includeNominators {
 			continue
 		}
 

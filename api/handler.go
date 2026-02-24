@@ -14,7 +14,7 @@ import (
 
 // ValidatorService describes the methods the API layer needs from the service layer.
 type ValidatorService interface {
-	FetchStats(ctx context.Context, seqno *uint32) (*model.Output, error)
+	FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error)
 }
 
 // Handler holds dependencies for HTTP handlers.
@@ -38,7 +38,9 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.svc.FetchStats(ctx, seqno)
+	includeNominators := r.URL.Query().Get("nominators") != "false"
+
+	out, err := h.svc.FetchStats(ctx, seqno, includeNominators)
 	if err != nil {
 		log.Printf("FetchStats error: %v", err)
 		writeError(w, err.Error(), http.StatusInternalServerError)
@@ -64,7 +66,9 @@ func (h *Service) HandleValidatorByPubkey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	out, err := h.svc.FetchStats(ctx, seqno)
+	includeNominators := r.URL.Query().Get("nominators") != "false"
+
+	out, err := h.svc.FetchStats(ctx, seqno, includeNominators)
 	if err != nil {
 		log.Printf("FetchStats error: %v", err)
 		writeError(w, err.Error(), http.StatusInternalServerError)

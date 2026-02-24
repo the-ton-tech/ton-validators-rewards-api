@@ -56,11 +56,14 @@ type poolEntry struct {
 
 // getAllPoolAddresses returns a map from validator pubkey to poolEntry.
 func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
-	model.CountRPC(ctx)
-	if list, err := elector.GetParticipantListExtended(ctx, electorAddr, client); err == nil && len(list.Validators) > 0 {
-		log.Printf("active election: id=%d, participants=%d, totalStake=%.2f TON",
-			list.ElectAt, len(list.Validators), float64(list.TotalStake)/1e9)
-	}
+	// GetParticipantListExtended is informational logging only — fire and forget.
+	go func() {
+		model.CountRPC(ctx)
+		if list, err := elector.GetParticipantListExtended(ctx, electorAddr, client); err == nil && len(list.Validators) > 0 {
+			log.Printf("active election: id=%d, participants=%d, totalStake=%.2f TON",
+				list.ElectAt, len(list.Validators), float64(list.TotalStake)/1e9)
+		}
+	}()
 	return poolsFromPastElections(ctx, client, electorAddr)
 }
 
