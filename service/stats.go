@@ -269,7 +269,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			}
 
 			for _, n := range pd.Nominators.Nominators {
-				addr := ton.AccountID{Workchain: -1, Address: tlb.Bits256(n.Address)}
+				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				var nomWeight float64
 				var nomPerBlock, nomStaked uint64
 				if totalAmount > 0 {
@@ -278,7 +278,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * float64(n.Amount) / float64(totalAmount))
 				}
 				entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
-					Address:        addr.ToHuman(true, false),
+					Address:        addr.ToHuman(false, false),
 					Weight:         nomWeight,
 					PerBlockReward: nomPerBlock,
 					Staked:         nomStaked,
