@@ -21,7 +21,13 @@ import (
 
 // poolTypeCache caches pool types for addresses that don't need fresh data.
 // Nominator Pools are NOT cached because we need fresh nominator data each time.
-var poolTypeCache sync.Map // ton.AccountID → pool type string
+// cachedPoolInfo stores immutable pool metadata for non-Nominator-Pool types.
+type cachedPoolInfo struct {
+	Type             string
+	ValidatorAddress tlb.Bits256
+}
+
+var poolTypeCache sync.Map // ton.AccountID → cachedPoolInfo
 
 var pastElectionsCache struct {
 	sync.Mutex
@@ -35,6 +41,7 @@ type poolData struct {
 	NominatorsAmount uint64
 	RewardShare      uint32
 	NominatorsCount  uint32
+	ValidatorAddress tlb.Bits256
 	Nominators       *abi.ListNominatorsResult
 }
 
@@ -51,7 +58,11 @@ type poolData struct {
 func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *poolData) {
 	// Fast path: confirmed type from a previous call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
-		return cached.(string), nil
+		info := cached.(cachedPoolInfo)
+		if info.ValidatorAddress != (tlb.Bits256{}) {
+			return info.Type, &poolData{ValidatorAddress: info.ValidatorAddress}
+		}
+		return info.Type, nil
 	}
 
 	// Step 1: ListNominators — authoritative for Nominator Pool detection.
@@ -76,6 +87,7 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 					pd.ValidatorAmount = uint64(tf.ValidatorAmount)
 					pd.RewardShare = tf.ValidatorRewardShare
 					pd.NominatorsCount = tf.NominatorsCount
+					pd.ValidatorAddress = tf.ValidatorAddress
 				}
 			}
 			return "Nominator Pool", pd
@@ -87,14 +99,17 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 	model.CountRPC(ctx)
 	_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
 	if gpErr == nil {
-		if _, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-			poolTypeCache.Store(poolAddr, "Single Nominator")
-			return "Single Nominator", nil
+		if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+			poolTypeCache.Store(poolAddr, cachedPoolInfo{
+				Type:             "Single Nominator",
+				ValidatorAddress: tf.ValidatorAddress,
+			})
+			return "Single Nominator", &poolData{ValidatorAddress: tf.ValidatorAddress}
 		}
 	}
 
 	// Step 3: No known type matched.
-	poolTypeCache.Store(poolAddr, "Other")
+	poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: "Other"})
 	return "Other", nil
 }
 

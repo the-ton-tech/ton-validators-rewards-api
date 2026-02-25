@@ -215,7 +215,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		entries[i] = model.ValidatorEntry{
 			Rank:           i + 1,
 			Pubkey:         fmt.Sprintf("%x", pk[:]),
-			Stake:          row.trueStake,
+			EffectiveStake: row.trueStake,
 			Weight:         share,
 			PerBlockReward: row.perBlockNT,
 			Pool:           row.pool,
@@ -234,7 +234,12 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
 			entries[idx].PoolType = poolType
 
-			if pd == nil {
+			if pd != nil && pd.ValidatorAddress != (tlb.Bits256{}) {
+				vAddr := ton.AccountID{Workchain: -1, Address: [32]byte(pd.ValidatorAddress)}
+				entries[idx].ValidatorAddress = vAddr.ToHuman(true, false)
+			}
+
+			if pd == nil || poolType != "Nominator Pool" {
 				// Non-Nominator Pool: fetch contract balance, approximate total.
 				contractBal, err := retry(func() (uint64, error) {
 					model.CountRPC(ctx)
@@ -245,16 +250,21 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					return uint64(st.Account.Account.Storage.Balance.Grams), nil
 				})
 				if err == nil {
-					entries[idx].Balance = contractBal + rows[idx].trueStake
+					entries[idx].TotalStake = contractBal + rows[idx].trueStake
 				}
 				return
 			}
 
 			// Nominator Pool: use data from GetPoolData + ListNominators.
-			entries[idx].Balance = pd.ValidatorAmount + pd.NominatorsAmount
 			entries[idx].ValidatorStake = pd.ValidatorAmount
 			entries[idx].NominatorsStake = pd.NominatorsAmount
-			entries[idx].ValidatorRewardShare = float64(pd.RewardShare) / 65536.0
+			entries[idx].TotalStake = entries[idx].ValidatorStake + entries[idx].NominatorsStake
+			// ValidatorRewardShare is stored on-chain as a uint32 in range [0, 10000],
+			// where 10000 = 100%. The nominator pool contract (pool.fc) computes:
+			//   validator_reward = reward * validator_reward_share / 10000
+			// For example, 3000 means the validator keeps 30% of rewards.
+			// See: https://github.com/ton-blockchain/nominator-pool/blob/main/func/pool.fc
+			entries[idx].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
 			entries[idx].NominatorsCount = pd.NominatorsCount
 
 			if pd.Nominators == nil {
@@ -268,6 +278,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 				nominatorsStake = totalAmount
 			}
 
+			nominatorRewardShare := 1.0 - float64(pd.RewardShare)/10000.0
 			for _, n := range pd.Nominators.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				var nomWeight float64
@@ -275,14 +286,14 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 				if totalAmount > 0 {
 					nomWeight = float64(n.Amount) / float64(totalAmount)
 					nomStaked = uint64(float64(nominatorsStake) * float64(n.Amount) / float64(totalAmount))
-					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * float64(n.Amount) / float64(totalAmount))
+					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * nominatorRewardShare * float64(n.Amount) / float64(totalAmount))
 				}
 				entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(false, false),
 					Weight:         nomWeight,
 					PerBlockReward: nomPerBlock,
-					Staked:         nomStaked,
-					PoolBalance:    uint64(n.Amount),
+					EffectiveStake: nomStaked,
+					Stake:          uint64(n.Amount),
 				})
 			}
 		}(i, *row.poolAddr)

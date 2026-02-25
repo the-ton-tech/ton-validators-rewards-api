@@ -61,23 +61,28 @@ Response:
     {
       "rank": 1,
       "pubkey": "e33f0e53552f951e...",
-      "stake": 2127654606060000,
-      "share": 0.004648,
+      "effective_stake": 2127654606060000,
+      "weight": 0.004648,
       "per_block_reward": 13614090,
+      "total_stake": 2376902585342169,
       "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
       "nominators": [
         {
           "address": "Ef9dcnCvPwcmBf-JbyIyY47LYCJ3obFCpRG-XhXMV1er1myc",
-          "share": 1.0,
+          "weight": 1.0,
           "per_block_reward": 13614090,
-          "staked": 2127654606060000,
-          "pool_balance": 2376902585342169
+          "effective_stake": 2127654606060000,
+          "stake": 2376902585342169
         }
       ]
     }
   ]
 }
 ```
+
+Field notes:
+- `total_stake` (top-level) is the sum of validators' effective stakes for the selected validation round.
+- `validators[].total_stake` is the validator pool total. For Nominator Pool it is `validator_stake + nominators_stake`; for non-Nominator pools it represents contract balance + elector effective stake.
 
 ### `GET /api/validators/{pubkey}`
 
@@ -118,4 +123,4 @@ main → api     → model
 5. Optionally fetches nominator lists for each pool in parallel (up to 100 concurrent RPC calls)
 6. Returns the assembled JSON response
 
-All values (stakes, balances, rewards) are in nanoTON.
+All TON amount values are in nanoTON.
