@@ -82,10 +82,50 @@ Response:
 }
 ```
 
-Field notes:
-- `total_stake` (top-level) is the sum of validators' effective stakes for the selected validation round.
-- `validators[].total_stake` is the validator pool total. For Nominator Pool it is `validator_stake + nominators_stake`; for non-Nominator pools it represents contract balance + elector effective stake.
-- `validators[].owner_address` and `validators[].validator_address` are populated when pool metadata is fetched (`nominators != false`) and the contract exposes these roles.
+#### Top-level fields
+
+| Field | Description |
+|---|---|
+| `response_time_ms` | Server-side response time in milliseconds |
+| `block.seqno` | Masterchain block sequence number |
+| `block.time` | Block timestamp (UTC, RFC 3339) |
+| `validation_round.start` | Current validation round start time |
+| `validation_round.end` | Current validation round end time |
+| `elector_balance` | Elector contract balance (nanoTON) |
+| `total_stake` | Sum of all active validators' effective stakes (nanoTON) |
+| `reward_per_block` | Total fees collected in the target block (nanoTON) |
+
+#### Validator fields
+
+| Field | Description |
+|---|---|
+| `rank` | Position in the validator list, sorted by effective stake (descending) |
+| `pubkey` | Validator's public key (hex-encoded Ed25519) |
+| `effective_stake` | Validator's true stake locked in the Elector contract (nanoTON) |
+| `weight` | Fraction of the total effective stake held by this validator (0–1) |
+| `per_block_reward` | Estimated reward this validator earns per masterchain block (nanoTON) |
+| `pool` | Pool smart contract address (bounceable, base64url) |
+| `validator_address` | Validator's wallet address (the one that controls the node) |
+| `owner_address` | The single owner who deposited funds. Only present for Single Nominator pools |
+| `pool_type` | Contract type: `"Nominator Pool"`, `"Single Nominator"`, etc. |
+| `validator_stake` | Validator's own funds deposited into the pool (nanoTON). Nominator Pool only |
+| `nominators_stake` | Sum of all nominator deposits in the pool (nanoTON). Nominator Pool only |
+| `total_stake` | Total funds in the pool. For Nominator Pool: `validator_stake + nominators_stake`. For others: approximated from contract balance + effective stake |
+| `validator_reward_share` | Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator Pool only |
+| `nominators_count` | Number of nominators in the pool. Nominator Pool only |
+| `nominators` | List of individual nominators. Nominator Pool only |
+
+#### Nominator fields (inside `nominators` array)
+
+| Field | Description |
+|---|---|
+| `address` | Nominator's wallet address (non-bounceable, base64url) |
+| `weight` | Nominator's share of the total nominators' deposit (0–1) |
+| `per_block_reward` | Estimated per-block reward after the validator's cut (nanoTON) |
+| `effective_stake` | Nominator's proportional share of the effective stake locked in the Elector (nanoTON) |
+| `stake` | Nominator's raw deposit in the pool contract (nanoTON) |
+
+Key distinction: `stake` / `total_stake` is what was deposited into the pool, while `effective_stake` is what the Elector actually locked. These differ because the Elector may accept less than the full pool balance.
 
 ### `GET /api/validators/{pubkey}`
 
