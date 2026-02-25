@@ -22,7 +22,7 @@ docker build -t validators-statistics .
 docker run -p 8080:8080 validators-statistics
 ```
 
-On first launch the TON global config is downloaded and cached to `/tmp/ton-global-config.json` for 7 days. The client connects to all available liteservers in parallel.
+On first launch the TON global config is downloaded and cached in memory for 7 days (per process). While the app is running, the lite client is refreshed after TTL so config can be reloaded without restart. The client connects to all available liteservers in parallel.
 
 ## API
 

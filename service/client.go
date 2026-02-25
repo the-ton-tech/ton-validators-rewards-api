@@ -6,8 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tonkeeper/tongo/config"
@@ -19,39 +18,17 @@ const (
 	cacheTTL  = 7 * 24 * time.Hour
 )
 
-// NewClientWithCachedConfig downloads the TON global config and caches it locally for 7 days.
+var globalConfigCache struct {
+	sync.Mutex
+	conf      *config.GlobalConfigurationFile
+	fetchedAt time.Time
+}
+
+// NewClientWithCachedConfig downloads the TON global config and caches it in memory for cacheTTL.
 func NewClientWithCachedConfig() (*liteapi.Client, error) {
-	cacheFile := filepath.Join(os.TempDir(), "ton-global-config.json")
-
-	var conf *config.GlobalConfigurationFile
-
-	if info, err := os.Stat(cacheFile); err == nil && time.Since(info.ModTime()) < cacheTTL {
-		conf, err = config.ParseConfigFile(cacheFile)
-		if err == nil {
-			log.Printf("using cached config (age: %s)", time.Since(info.ModTime()).Round(time.Minute))
-		}
-	}
-
-	if conf == nil {
-		log.Printf("downloading config from %s...", configURL)
-		resp, err := http.Get(configURL) //nolint:noctx
-		if err != nil {
-			return nil, fmt.Errorf("download config: %w", err)
-		}
-		defer resp.Body.Close()
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("read config body: %w", err)
-		}
-		conf, err = config.ParseConfig(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("parse config: %w", err)
-		}
-		if err := os.WriteFile(cacheFile, data, 0o644); err != nil {
-			log.Printf("warning: could not cache config: %v", err)
-		} else {
-			log.Printf("config cached to %s", cacheFile)
-		}
+	conf, err := getCachedGlobalConfig()
+	if err != nil {
+		return nil, err
 	}
 
 	maxConns := len(conf.LiteServers)
@@ -62,4 +39,35 @@ func NewClientWithCachedConfig() (*liteapi.Client, error) {
 		liteapi.WithMaxConnectionsNumber(maxConns),
 		liteapi.WithAsyncConnectionsInit(),
 	)
+}
+
+func getCachedGlobalConfig() (*config.GlobalConfigurationFile, error) {
+	globalConfigCache.Lock()
+	defer globalConfigCache.Unlock()
+
+	if globalConfigCache.conf != nil && time.Since(globalConfigCache.fetchedAt) < cacheTTL {
+		log.Printf("using in-memory cached config (age: %s)", time.Since(globalConfigCache.fetchedAt).Round(time.Minute))
+		return globalConfigCache.conf, nil
+	}
+
+	log.Printf("downloading config from %s...", configURL)
+	resp, err := http.Get(configURL) //nolint:noctx
+	if err != nil {
+		return nil, fmt.Errorf("download config: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read config body: %w", err)
+	}
+	conf, err := config.ParseConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	globalConfigCache.conf = conf
+	globalConfigCache.fetchedAt = time.Now()
+	log.Printf("global config cached in memory")
+
+	return conf, nil
 }

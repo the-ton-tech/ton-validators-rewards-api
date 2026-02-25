@@ -24,6 +24,8 @@ func msgAddressToHuman(addr tlb.MsgAddress, bounce bool) (string, bool) {
 
 // FetchStats fetches validator statistics for the given seqno (or latest if nil).
 func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error) {
+	client := s.currentClient()
+
 	// Resolve the target block: use provided seqno or fall back to latest.
 	var blockIDExt ton.BlockIDExt
 	var blockTime time.Time
@@ -33,14 +35,14 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	if seqno != nil {
 		var err error
-		blockIDExt, blockTime, err = lookupMasterchainBlock(ctx, s.client, *seqno)
+		blockIDExt, blockTime, err = lookupMasterchainBlock(ctx, client, *seqno)
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock: %w", err)
 		}
 	} else {
 		info, err := retry(func() (ton.BlockIDExt, error) {
 			model.CountRPC(ctx)
-			res, err := s.client.GetMasterchainInfo(ctx)
+			res, err := client.GetMasterchainInfo(ctx)
 			if err != nil {
 				return ton.BlockIDExt{}, err
 			}
@@ -57,7 +59,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		needBlockTime = true
 	}
 
-	pinned := s.client.WithBlock(blockIDExt)
+	pinned := client.WithBlock(blockIDExt)
 
 	// Fetch independent data in parallel.
 	var (
@@ -76,7 +78,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		fetchWg.Add(1)
 		go func() {
 			defer fetchWg.Done()
-			_, btime, err := lookupMasterchainBlock(ctx, s.client, blockIDExt.Seqno)
+			_, btime, err := lookupMasterchainBlock(ctx, client, blockIDExt.Seqno)
 			if err == nil {
 				blockTime = btime
 			}
@@ -136,7 +138,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		defer fetchWg.Done()
 		reward, err := retry(func() (uint64, error) {
 			model.CountRPC(ctx)
-			block, err := s.client.GetBlock(ctx, blockIDExt)
+			block, err := client.GetBlock(ctx, blockIDExt)
 			if err != nil {
 				return 0, err
 			}
