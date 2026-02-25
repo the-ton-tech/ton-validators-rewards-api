@@ -30,6 +30,7 @@ type ValidatorEntry struct {
 	Weight               float64          `json:"weight"`
 	PerBlockReward       uint64           `json:"per_block_reward"`
 	Pool                 string           `json:"pool,omitempty"`
+	OwnerAddress         string           `json:"owner_address,omitempty"`
 	ValidatorAddress     string           `json:"validator_address,omitempty"`
 	PoolType             string           `json:"pool_type,omitempty"`
 	ValidatorStake       uint64           `json:"validator_stake,omitempty"`

@@ -14,6 +14,14 @@ import (
 	"github.com/tonkeeper/validators-statistics/model"
 )
 
+func msgAddressToHuman(addr tlb.MsgAddress, bounce bool) (string, bool) {
+	id, err := ton.AccountIDFromTlb(addr)
+	if err != nil || id == nil {
+		return "", false
+	}
+	return id.ToHuman(bounce, false), true
+}
+
 // FetchStats fetches validator statistics for the given seqno (or latest if nil).
 func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error) {
 	// Resolve the target block: use provided seqno or fall back to latest.
@@ -234,9 +242,16 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
 			entries[idx].PoolType = poolType
 
-			if pd != nil && pd.ValidatorAddress != (tlb.Bits256{}) {
-				vAddr := ton.AccountID{Workchain: -1, Address: [32]byte(pd.ValidatorAddress)}
-				entries[idx].ValidatorAddress = vAddr.ToHuman(true, false)
+			if pd != nil {
+				if vAddr, ok := msgAddressToHuman(pd.ValidatorWalletAddress, true); ok {
+					entries[idx].ValidatorAddress = vAddr
+				} else if pd.ValidatorAddress != (tlb.Bits256{}) {
+					vAddr := ton.AccountID{Workchain: -1, Address: [32]byte(pd.ValidatorAddress)}
+					entries[idx].ValidatorAddress = vAddr.ToHuman(true, false)
+				}
+				if ownerAddr, ok := msgAddressToHuman(pd.OwnerAddress, true); ok {
+					entries[idx].OwnerAddress = ownerAddr
+				}
 			}
 
 			if pd == nil || poolType != "Nominator Pool" {

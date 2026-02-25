@@ -66,6 +66,8 @@ Response:
       "per_block_reward": 13614090,
       "total_stake": 2376902585342169,
       "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
+      "owner_address": "EQB7...",
+      "validator_address": "Ef9T...",
       "nominators": [
         {
           "address": "Ef9dcnCvPwcmBf-JbyIyY47LYCJ3obFCpRG-XhXMV1er1myc",
@@ -83,6 +85,7 @@ Response:
 Field notes:
 - `total_stake` (top-level) is the sum of validators' effective stakes for the selected validation round.
 - `validators[].total_stake` is the validator pool total. For Nominator Pool it is `validator_stake + nominators_stake`; for non-Nominator pools it represents contract balance + elector effective stake.
+- `validators[].owner_address` and `validators[].validator_address` are populated when pool metadata is fetched (`nominators != false`) and the contract exposes these roles.
 
 ### `GET /api/validators/{pubkey}`
 

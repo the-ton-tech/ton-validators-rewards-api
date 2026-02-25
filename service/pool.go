@@ -23,8 +23,10 @@ import (
 // Nominator Pools are NOT cached because we need fresh nominator data each time.
 // cachedPoolInfo stores immutable pool metadata for non-Nominator-Pool types.
 type cachedPoolInfo struct {
-	Type             string
-	ValidatorAddress tlb.Bits256
+	Type                   string
+	ValidatorAddress       tlb.Bits256
+	OwnerAddress           tlb.MsgAddress
+	ValidatorWalletAddress tlb.MsgAddress
 }
 
 var poolTypeCache sync.Map // ton.AccountID → cachedPoolInfo
@@ -37,12 +39,14 @@ var pastElectionsCache struct {
 
 // poolData holds data returned by GetPoolData + ListNominators for nominator pools.
 type poolData struct {
-	ValidatorAmount  uint64
-	NominatorsAmount uint64
-	RewardShare      uint32
-	NominatorsCount  uint32
-	ValidatorAddress tlb.Bits256
-	Nominators       *abi.ListNominatorsResult
+	ValidatorAmount        uint64
+	NominatorsAmount       uint64
+	RewardShare            uint32
+	NominatorsCount        uint32
+	ValidatorAddress       tlb.Bits256
+	OwnerAddress           tlb.MsgAddress
+	ValidatorWalletAddress tlb.MsgAddress
+	Nominators             *abi.ListNominatorsResult
 }
 
 // fetchPoolData determines the pool type and, for nominator pools, returns
@@ -59,8 +63,12 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 	// Fast path: confirmed type from a previous call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
 		info := cached.(cachedPoolInfo)
-		if info.ValidatorAddress != (tlb.Bits256{}) {
-			return info.Type, &poolData{ValidatorAddress: info.ValidatorAddress}
+		if info.ValidatorAddress != (tlb.Bits256{}) || info.OwnerAddress.SumType != "" || info.ValidatorWalletAddress.SumType != "" {
+			return info.Type, &poolData{
+				ValidatorAddress:       info.ValidatorAddress,
+				OwnerAddress:           info.OwnerAddress,
+				ValidatorWalletAddress: info.ValidatorWalletAddress,
+			}
 		}
 		return info.Type, nil
 	}
@@ -100,17 +108,52 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 	_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
 	if gpErr == nil {
 		if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+			pd := &poolData{ValidatorAddress: tf.ValidatorAddress}
+			if roles, ok := fetchPoolRoles(ctx, executor, poolAddr); ok {
+				pd.OwnerAddress = roles.OwnerAddress
+				pd.ValidatorWalletAddress = roles.ValidatorAddress
+			}
 			poolTypeCache.Store(poolAddr, cachedPoolInfo{
-				Type:             "Single Nominator",
-				ValidatorAddress: tf.ValidatorAddress,
+				Type:                   "Single Nominator",
+				ValidatorAddress:       pd.ValidatorAddress,
+				OwnerAddress:           pd.OwnerAddress,
+				ValidatorWalletAddress: pd.ValidatorWalletAddress,
 			})
-			return "Single Nominator", &poolData{ValidatorAddress: tf.ValidatorAddress}
+			return "Single Nominator", pd
 		}
 	}
 
 	// Step 3: No known type matched.
 	poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: "Other"})
 	return "Other", nil
+}
+
+type getRolesResult struct {
+	OwnerAddress     tlb.MsgAddress
+	ValidatorAddress tlb.MsgAddress
+}
+
+// fetchPoolRoles reads owner and validator wallet addresses from get_roles.
+func fetchPoolRoles(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (getRolesResult, bool) {
+	model.CountRPC(ctx)
+	errCode, stack, err := executor.RunSmcMethodByID(ctx, poolAddr, utils.MethodIdFromName("get_roles"), tlb.VmStack{})
+	if err != nil || (errCode != 0 && errCode != 1) {
+		return getRolesResult{}, false
+	}
+
+	if len(stack) != 2 {
+		return getRolesResult{}, false
+	}
+	if (stack[0].SumType != "VmStkSlice" && stack[0].SumType != "VmStkNull") ||
+		(stack[1].SumType != "VmStkSlice" && stack[1].SumType != "VmStkNull") {
+		return getRolesResult{}, false
+	}
+
+	var result getRolesResult
+	if err := stack.Unmarshal(&result); err != nil {
+		return getRolesResult{}, false
+	}
+	return result, true
 }
 
 // frozenMember matches the TL-B layout of a member in past_elections hashmap:
