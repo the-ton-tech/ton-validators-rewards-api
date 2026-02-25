@@ -19,10 +19,9 @@ import (
 	"github.com/tonkeeper/validators-statistics/model"
 )
 
-// poolTypeCache caches pool addresses known to be "Single Nominator"
-// so we skip the ListNominators RPC call on subsequent requests.
+// poolTypeCache caches pool types for addresses that don't need fresh data.
 // Nominator Pools are NOT cached because we need fresh nominator data each time.
-var poolTypeCache sync.Map // ton.AccountID → "Single Nominator"
+var poolTypeCache sync.Map // ton.AccountID → pool type string
 
 var pastElectionsCache struct {
 	sync.Mutex
@@ -30,43 +29,73 @@ var pastElectionsCache struct {
 	data        map[tlb.Bits256]poolEntry
 }
 
-// detectPoolType determines the pool contract type and returns nominator data.
-// Uses a single ListNominators call:
-//   - succeeds with nominators → "Nominator Pool" + nominators
-//   - succeeds but no valid result → "Single Nominator" (cached)
-//   - RPC error → "Single Nominator" (NOT cached, will retry next request)
+// poolData holds data returned by GetPoolData + ListNominators for nominator pools.
+type poolData struct {
+	ValidatorAmount  uint64
+	NominatorsAmount uint64
+	RewardShare      uint32
+	NominatorsCount  uint32
+	Nominators       *abi.ListNominatorsResult
+}
+
+// fetchPoolData determines the pool type and, for nominator pools, returns
+// enriched pool data from GetPoolData + ListNominators.
 //
-// Only "Single Nominator" confirmed results are cached; Nominator Pools are
-// re-fetched each call to get fresh nominator data.
-func detectPoolType(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *abi.ListNominatorsResult) {
-	// Fast path: confirmed Single Nominator — skip the RPC call.
+// Detection order:
+//  1. ListNominators — succeeds → "Nominator Pool" (TvPool with nominators)
+//  2. GetPoolData TfResult — succeeds → "Single Nominator" (TF-family, no nominators)
+//  3. None matched → "Other"
+//
+// All types except "Nominator Pool" are cached (they have no per-request data).
+// Network errors skip detection entirely and return ("", nil) without caching.
+func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *poolData) {
+	// Fast path: confirmed type from a previous call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
 		return cached.(string), nil
 	}
 
+	// Step 1: ListNominators — authoritative for Nominator Pool detection.
 	model.CountRPC(ctx)
-	_, result, err := abi.ListNominators(ctx, executor, poolAddr)
-	if err != nil {
-		if strings.Contains(err.Error(), "method execution failed") {
-			// TVM error (code 11, 32, etc.) — deterministic, contract doesn't
-			// support list_nominators. Cache to avoid repeating on next request.
-			poolTypeCache.Store(poolAddr, "Single Nominator")
+	_, lnResult, lnErr := abi.ListNominators(ctx, executor, poolAddr)
+	if lnErr != nil && !strings.Contains(lnErr.Error(), "method execution failed") {
+		// Network error — don't try other methods, don't cache.
+		return "", nil
+	}
+	if lnErr == nil {
+		if noms, ok := lnResult.(abi.ListNominatorsResult); ok {
+			// Confirmed Nominator Pool — build poolData.
+			pd := &poolData{Nominators: &noms}
+			for _, n := range noms.Nominators {
+				pd.NominatorsAmount += uint64(n.Amount)
+			}
+			// Enrich with GetPoolData (validator amount, reward share, etc.).
+			model.CountRPC(ctx)
+			_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
+			if gpErr == nil {
+				if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+					pd.ValidatorAmount = uint64(tf.ValidatorAmount)
+					pd.RewardShare = tf.ValidatorRewardShare
+					pd.NominatorsCount = tf.NominatorsCount
+				}
+			}
+			return "Nominator Pool", pd
 		}
-		// Network errors are NOT cached — will retry on next request.
-		return "Single Nominator", nil
-	}
-	var noms *abi.ListNominatorsResult
-	if n, ok := result.(abi.ListNominatorsResult); ok {
-		noms = &n
 	}
 
-	if noms != nil {
-		return "Nominator Pool", noms
+	// Step 2: GetPoolData TfResult — TF-family contract without list_nominators
+	// means Single Nominator (single-nominator-pool shares get_pool_data with TvPool).
+	model.CountRPC(ctx)
+	_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
+	if gpErr == nil {
+		if _, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+			poolTypeCache.Store(poolAddr, "Single Nominator")
+			return "Single Nominator", nil
+		}
 	}
 
-	// Call succeeded but returned non-nominator result — confirmed Single Nominator.
-	poolTypeCache.Store(poolAddr, "Single Nominator")
-	return "Single Nominator", nil
+	// Step 3: No known type matched.
+	poolTypeCache.Store(poolAddr, "Other")
+	return "Other", nil
 }
 
 // frozenMember matches the TL-B layout of a member in past_elections hashmap:

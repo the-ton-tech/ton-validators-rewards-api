@@ -231,24 +231,44 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			poolType, nominators := detectPoolType(ctx, pinned, poolAddr)
+			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
 			entries[idx].PoolType = poolType
 
-			if nominators == nil {
+			if pd == nil {
+				// Non-Nominator Pool: fetch contract balance, approximate total.
+				contractBal, err := retry(func() (uint64, error) {
+					model.CountRPC(ctx)
+					st, err := pinned.GetAccountState(ctx, poolAddr)
+					if err != nil {
+						return 0, err
+					}
+					return uint64(st.Account.Account.Storage.Balance.Grams), nil
+				})
+				if err == nil {
+					entries[idx].Balance = contractBal + rows[idx].trueStake
+				}
 				return
 			}
-			var totalAmount uint64
-			for _, n := range nominators.Nominators {
-				totalAmount += uint64(n.Amount)
+
+			// Nominator Pool: use data from GetPoolData + ListNominators.
+			entries[idx].Balance = pd.ValidatorAmount + pd.NominatorsAmount
+			entries[idx].ValidatorStake = pd.ValidatorAmount
+			entries[idx].NominatorsStake = pd.NominatorsAmount
+			entries[idx].ValidatorRewardShare = float64(pd.RewardShare) / 65536.0
+			entries[idx].NominatorsCount = pd.NominatorsCount
+
+			if pd.Nominators == nil {
+				return
 			}
-			// Nominator share of true_stake: nominators don't own the validator's own stake,
-			// so scale by totalAmount/trueStake to exclude the validator's portion.
+
+			totalAmount := pd.NominatorsAmount
+			// Nominator share of true_stake: nominators don't own the validator's own stake.
 			nominatorsStake := rows[idx].trueStake
 			if totalAmount < nominatorsStake {
 				nominatorsStake = totalAmount
 			}
 
-			for _, n := range nominators.Nominators {
+			for _, n := range pd.Nominators.Nominators {
 				addr := ton.AccountID{Workchain: -1, Address: tlb.Bits256(n.Address)}
 				var nomWeight float64
 				var nomPerBlock, nomStaked uint64

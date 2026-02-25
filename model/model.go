@@ -29,9 +29,14 @@ type ValidatorEntry struct {
 	Stake          uint64           `json:"stake"`
 	Weight         float64          `json:"weight"`
 	PerBlockReward uint64           `json:"per_block_reward"`
-	Pool           string           `json:"pool,omitempty"`
-	PoolType       string           `json:"pool_type,omitempty"`
-	Nominators     []NominatorEntry `json:"nominators,omitempty"`
+	Pool                 string           `json:"pool,omitempty"`
+	PoolType             string           `json:"pool_type,omitempty"`
+	Balance              uint64           `json:"balance,omitempty"` // contract balance + elector stake
+	ValidatorStake       uint64           `json:"validator_stake,omitempty"`
+	NominatorsStake      uint64           `json:"nominators_stake,omitempty"`
+	ValidatorRewardShare float64          `json:"validator_reward_share,omitempty"` // 0.0–1.0
+	NominatorsCount      uint32           `json:"nominators_count,omitempty"`
+	Nominators           []NominatorEntry `json:"nominators,omitempty"`
 }
 
 type NominatorEntry struct {
