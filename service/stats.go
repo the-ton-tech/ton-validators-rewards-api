@@ -30,16 +30,22 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return nil, fmt.Errorf("lookupMasterchainBlock: %w", err)
 		}
 	} else {
-		model.CountRPC(ctx)
-		info, err := s.client.GetMasterchainInfo(ctx)
+		info, err := retry(func() (ton.BlockIDExt, error) {
+			model.CountRPC(ctx)
+			res, err := s.client.GetMasterchainInfo(ctx)
+			if err != nil {
+				return ton.BlockIDExt{}, err
+			}
+			return ton.BlockIDExt{
+				BlockID:  ton.BlockID{Workchain: int32(res.Last.Workchain), Shard: res.Last.Shard, Seqno: res.Last.Seqno},
+				RootHash: ton.Bits256(res.Last.RootHash),
+				FileHash: ton.Bits256(res.Last.FileHash),
+			}, nil
+		})
 		if err != nil {
 			return nil, fmt.Errorf("GetMasterchainInfo: %w", err)
 		}
-		blockIDExt = ton.BlockIDExt{
-			BlockID:  ton.BlockID{Workchain: int32(info.Last.Workchain), Shard: info.Last.Shard, Seqno: info.Last.Seqno},
-			RootHash: ton.Bits256(info.Last.RootHash),
-			FileHash: ton.Bits256(info.Last.FileHash),
-		}
+		blockIDExt = info
 		needBlockTime = true
 	}
 
@@ -72,15 +78,20 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	// Config param 34: current validators.
 	go func() {
 		defer fetchWg.Done()
-		model.CountRPC(ctx)
-		params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
+		c, err := retry(func() (*ton.BlockchainConfig, error) {
+			model.CountRPC(ctx)
+			params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
+			if err != nil {
+				return nil, fmt.Errorf("GetConfigParams: %w (liteservers only retain state for recent blocks)", err)
+			}
+			c, _, err := ton.ConvertBlockchainConfig(params, true)
+			if err != nil {
+				return nil, fmt.Errorf("ConvertBlockchainConfig: %w", err)
+			}
+			return c, nil
+		})
 		if err != nil {
-			confErr = fmt.Errorf("GetConfigParams: %w (liteservers only retain state for recent blocks)", err)
-			return
-		}
-		c, _, err := ton.ConvertBlockchainConfig(params, true)
-		if err != nil {
-			confErr = fmt.Errorf("ConvertBlockchainConfig: %w", err)
+			confErr = err
 			return
 		}
 		conf = c
@@ -99,18 +110,32 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	// Elector balance.
 	go func() {
 		defer fetchWg.Done()
-		model.CountRPC(ctx)
-		if st, err := pinned.GetAccountState(ctx, electorAddr); err == nil {
-			electorBalance = uint64(st.Account.Account.Storage.Balance.Grams)
+		bal, err := retry(func() (uint64, error) {
+			model.CountRPC(ctx)
+			st, err := pinned.GetAccountState(ctx, electorAddr)
+			if err != nil {
+				return 0, err
+			}
+			return uint64(st.Account.Account.Storage.Balance.Grams), nil
+		})
+		if err == nil {
+			electorBalance = bal
 		}
 	}()
 
 	// Per-block reward = fees_collected from ValueFlow.
 	go func() {
 		defer fetchWg.Done()
-		model.CountRPC(ctx)
-		if block, err := s.client.GetBlock(ctx, blockIDExt); err == nil {
-			rewardPerBlock = uint64(block.ValueFlow.FeesCollected.Grams)
+		reward, err := retry(func() (uint64, error) {
+			model.CountRPC(ctx)
+			block, err := s.client.GetBlock(ctx, blockIDExt)
+			if err != nil {
+				return 0, err
+			}
+			return uint64(block.ValueFlow.FeesCollected.Grams), nil
+		})
+		if err == nil {
+			rewardPerBlock = reward
 		}
 	}()
 
@@ -191,7 +216,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			Rank:           i + 1,
 			Pubkey:         fmt.Sprintf("%x", pk[:]),
 			Stake:          row.trueStake,
-			Share:          share,
+			Weight:         share,
 			PerBlockReward: row.perBlockNT,
 			Pool:           row.pool,
 		}
@@ -216,18 +241,25 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			for _, n := range nominators.Nominators {
 				totalAmount += uint64(n.Amount)
 			}
+			// Nominator share of true_stake: nominators don't own the validator's own stake,
+			// so scale by totalAmount/trueStake to exclude the validator's portion.
+			nominatorsStake := rows[idx].trueStake
+			if totalAmount < nominatorsStake {
+				nominatorsStake = totalAmount
+			}
+
 			for _, n := range nominators.Nominators {
 				addr := ton.AccountID{Workchain: -1, Address: tlb.Bits256(n.Address)}
-				var nomShare float64
+				var nomWeight float64
 				var nomPerBlock, nomStaked uint64
 				if totalAmount > 0 {
-					nomShare = float64(n.Amount) / float64(totalAmount)
+					nomWeight = float64(n.Amount) / float64(totalAmount)
+					nomStaked = uint64(float64(nominatorsStake) * float64(n.Amount) / float64(totalAmount))
 					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * float64(n.Amount) / float64(totalAmount))
-					nomStaked = uint64(float64(rows[idx].trueStake) * float64(n.Amount) / float64(totalAmount))
 				}
 				entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(true, false),
-					Share:          nomShare,
+					Weight:         nomWeight,
 					PerBlockReward: nomPerBlock,
 					Staked:         nomStaked,
 					PoolBalance:    uint64(n.Amount),

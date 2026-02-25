@@ -27,7 +27,7 @@ type ValidatorEntry struct {
 	Rank           int              `json:"rank"`
 	Pubkey         string           `json:"pubkey"`
 	Stake          uint64           `json:"stake"`
-	Share          float64          `json:"share"`
+	Weight         float64          `json:"weight"`
 	PerBlockReward uint64           `json:"per_block_reward"`
 	Pool           string           `json:"pool,omitempty"`
 	PoolType       string           `json:"pool_type,omitempty"`
@@ -36,7 +36,7 @@ type ValidatorEntry struct {
 
 type NominatorEntry struct {
 	Address        string  `json:"address"`
-	Share          float64 `json:"share"`
+	Weight         float64 `json:"weight"`
 	PerBlockReward uint64  `json:"per_block_reward"`
 	Staked         uint64  `json:"staked"`       // proportional share of validator's true_stake
 	PoolBalance    uint64  `json:"pool_balance"` // pool's internal balance (includes reinvested rewards)

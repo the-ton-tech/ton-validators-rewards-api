@@ -29,12 +29,19 @@ func lookupMasterchainBlock(ctx context.Context, client *liteapi.Client, seqno u
 		Shard:     0x8000000000000000,
 		Seqno:     seqno,
 	}
-	model.CountRPC(ctx)
-	ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
-	if err != nil {
-		return ton.BlockIDExt{}, time.Time{}, err
+	type result struct {
+		ext  ton.BlockIDExt
+		time time.Time
 	}
-	return ext, time.Unix(int64(info.GenUtime), 0), nil
+	r, err := retry(func() (result, error) {
+		model.CountRPC(ctx)
+		ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
+		if err != nil {
+			return result{}, err
+		}
+		return result{ext, time.Unix(int64(info.GenUtime), 0)}, nil
+	})
+	return r.ext, r.time, err
 }
 
 // getRoundInfo returns the unix timestamps of the current validation round start and end.
