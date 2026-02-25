@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/tonkeeper/validators-statistics/model"
 )
@@ -63,31 +63,27 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	// Fetch independent data in parallel.
 	var (
-		fetchWg        sync.WaitGroup
 		conf           *ton.BlockchainConfig
-		confErr        error
 		pools          map[tlb.Bits256]poolEntry
 		electorBalance uint64
 		rewardPerBlock uint64
 	)
 
-	fetchWg.Add(4)
+	g := new(errgroup.Group)
 
 	// Block time (only when seqno was nil — deferred from block resolution).
 	if needBlockTime {
-		fetchWg.Add(1)
-		go func() {
-			defer fetchWg.Done()
+		g.Go(func() error {
 			_, btime, err := lookupMasterchainBlock(ctx, client, blockIDExt.Seqno)
 			if err == nil {
 				blockTime = btime
 			}
-		}()
+			return nil
+		})
 	}
 
 	// Config param 34: current validators.
-	go func() {
-		defer fetchWg.Done()
+	g.Go(func() error {
 		c, err := retry(func() (*ton.BlockchainConfig, error) {
 			model.CountRPC(ctx)
 			params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
@@ -101,25 +97,24 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return c, nil
 		})
 		if err != nil {
-			confErr = err
-			return
+			return err
 		}
 		conf = c
-	}()
+		return nil
+	})
 
 	// Pool addresses and true stakes from past_elections.
-	go func() {
-		defer fetchWg.Done()
+	g.Go(func() error {
 		p, err := getAllPoolAddresses(ctx, pinned, electorAddr)
 		if err != nil {
 			log.Printf("warning: pool addresses: %v", err)
 		}
 		pools = p
-	}()
+		return nil
+	})
 
 	// Elector balance.
-	go func() {
-		defer fetchWg.Done()
+	g.Go(func() error {
 		bal, err := retry(func() (uint64, error) {
 			model.CountRPC(ctx)
 			st, err := pinned.GetAccountState(ctx, electorAddr)
@@ -131,11 +126,11 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		if err == nil {
 			electorBalance = bal
 		}
-	}()
+		return nil
+	})
 
 	// Per-block reward = fees_collected from ValueFlow.
-	go func() {
-		defer fetchWg.Done()
+	g.Go(func() error {
 		reward, err := retry(func() (uint64, error) {
 			model.CountRPC(ctx)
 			block, err := client.GetBlock(ctx, blockIDExt)
@@ -147,12 +142,11 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		if err == nil {
 			rewardPerBlock = reward
 		}
-	}()
+		return nil
+	})
 
-	fetchWg.Wait()
-
-	if confErr != nil {
-		return nil, confErr
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	log.Printf("block seqno=%d time=%s", blockIDExt.Seqno, blockTime.UTC().Format(time.RFC3339))
@@ -213,8 +207,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	// Collect nominators and build final validator list (parallel).
 	entries := make([]model.ValidatorEntry, len(rows))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 100) // limit concurrent RPC calls
+	g2 := new(errgroup.Group)
 
 	for i, row := range rows {
 		pk := row.v.PubKey()
@@ -235,24 +228,20 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			continue
 		}
 
-		wg.Add(1)
-		go func(idx int, poolAddr ton.AccountID) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
+		g2.Go(func() error {
+			poolAddr := *row.poolAddr
 			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
-			entries[idx].PoolType = poolType
+			entries[i].PoolType = poolType
 
 			if pd != nil {
 				if vAddr, ok := msgAddressToHuman(pd.ValidatorWalletAddress, true); ok {
-					entries[idx].ValidatorAddress = vAddr
+					entries[i].ValidatorAddress = vAddr
 				} else if pd.ValidatorAddress != (tlb.Bits256{}) {
 					vAddr := ton.AccountID{Workchain: -1, Address: [32]byte(pd.ValidatorAddress)}
-					entries[idx].ValidatorAddress = vAddr.ToHuman(true, false)
+					entries[i].ValidatorAddress = vAddr.ToHuman(true, false)
 				}
 				if ownerAddr, ok := msgAddressToHuman(pd.OwnerAddress, true); ok {
-					entries[idx].OwnerAddress = ownerAddr
+					entries[i].OwnerAddress = ownerAddr
 				}
 			}
 
@@ -267,30 +256,30 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					return uint64(st.Account.Account.Storage.Balance.Grams), nil
 				})
 				if err == nil {
-					entries[idx].TotalStake = contractBal + rows[idx].trueStake
+					entries[i].TotalStake = contractBal + rows[i].trueStake
 				}
-				return
+				return nil
 			}
 
 			// Nominator Pool: use data from GetPoolData + ListNominators.
-			entries[idx].ValidatorStake = pd.ValidatorAmount
-			entries[idx].NominatorsStake = pd.NominatorsAmount
-			entries[idx].TotalStake = entries[idx].ValidatorStake + entries[idx].NominatorsStake
+			entries[i].ValidatorStake = pd.ValidatorAmount
+			entries[i].NominatorsStake = pd.NominatorsAmount
+			entries[i].TotalStake = entries[i].ValidatorStake + entries[i].NominatorsStake
 			// ValidatorRewardShare is stored on-chain as a uint32 in range [0, 10000],
 			// where 10000 = 100%. The nominator pool contract (pool.fc) computes:
 			//   validator_reward = reward * validator_reward_share / 10000
 			// For example, 3000 means the validator keeps 30% of rewards.
 			// See: https://github.com/ton-blockchain/nominator-pool/blob/main/func/pool.fc
-			entries[idx].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
-			entries[idx].NominatorsCount = pd.NominatorsCount
+			entries[i].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
+			entries[i].NominatorsCount = pd.NominatorsCount
 
 			if pd.Nominators == nil {
-				return
+				return nil
 			}
 
 			totalAmount := pd.NominatorsAmount
 			// Nominator share of true_stake: nominators don't own the validator's own stake.
-			nominatorsStake := rows[idx].trueStake
+			nominatorsStake := rows[i].trueStake
 			if totalAmount < nominatorsStake {
 				nominatorsStake = totalAmount
 			}
@@ -303,9 +292,9 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 				if totalAmount > 0 {
 					nomWeight = float64(n.Amount) / float64(totalAmount)
 					nomStaked = uint64(float64(nominatorsStake) * float64(n.Amount) / float64(totalAmount))
-					nomPerBlock = uint64(float64(rows[idx].perBlockNT) * nominatorRewardShare * float64(n.Amount) / float64(totalAmount))
+					nomPerBlock = uint64(float64(rows[i].perBlockNT) * nominatorRewardShare * float64(n.Amount) / float64(totalAmount))
 				}
-				entries[idx].Nominators = append(entries[idx].Nominators, model.NominatorEntry{
+				entries[i].Nominators = append(entries[i].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(false, false),
 					Weight:         nomWeight,
 					PerBlockReward: nomPerBlock,
@@ -313,9 +302,10 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					Stake:          uint64(n.Amount),
 				})
 			}
-		}(i, *row.poolAddr)
+			return nil
+		})
 	}
-	wg.Wait()
+	g2.Wait()
 
 	out.Validators = entries
 	return &out, nil
