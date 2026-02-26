@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: TON Validators Statistics API
+  title: TON Validators Rewards API
   description: >
-    Returns current TON validator statistics — stakes, per-block rewards,
+    Returns TON validator rewards and staking data — stakes, per-block rewards,
     pool addresses, and nominator breakdowns — fetched directly from TON
     liteservers.
   version: 1.0.0

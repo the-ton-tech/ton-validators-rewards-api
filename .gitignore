@@ -12,4 +12,4 @@
 .env.production
 go.work
 go.work.sum
-validators-statistics
+ton-validators-rewards-api

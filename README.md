@@ -1,25 +1,25 @@
-# validators-statistics
+# ton-validators-rewards-api
 
-HTTP API that returns current TON validator statistics — stakes, per-block rewards, pool addresses, and nominator breakdowns — fetched directly from TON liteservers via the [tongo](https://github.com/tonkeeper/tongo) library.
+HTTP API that returns TON validator rewards and staking data — stakes, per-block rewards, pool addresses, and nominator breakdowns — fetched directly from TON liteservers via the [tongo](https://github.com/tonkeeper/tongo) library.
 
 ## Quick start
 
 ```bash
-go build -o validators-statistics .
-./validators-statistics
+go build -o ton-validators-rewards-api .
+./ton-validators-rewards-api
 ```
 
 The server listens on port `8080` by default. Override with the `PORT` environment variable:
 
 ```bash
-PORT=3000 ./validators-statistics
+PORT=3000 ./ton-validators-rewards-api
 ```
 
 ### Docker
 
 ```bash
-docker build -t validators-statistics .
-docker run -p 8080:8080 validators-statistics
+docker build -t ton-validators-rewards-api .
+docker run -p 8080:8080 ton-validators-rewards-api
 ```
 
 On first launch the TON global config is downloaded and cached in memory for 7 days (per process). While the app is running, the lite client is refreshed after TTL so config can be reloaded without restart. The client connects to all available liteservers in parallel.
