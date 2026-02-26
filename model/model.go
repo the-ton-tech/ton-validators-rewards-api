@@ -6,6 +6,7 @@ type Output struct {
 	ResponseTimeMs  int64            `json:"response_time_ms"`
 	Block           BlockInfo        `json:"block"`
 	ValidationRound RoundInfo        `json:"validation_round"`
+	ElectionID      int64            `json:"election_id"`
 	ElectorBalance  uint64           `json:"elector_balance"`
 	TotalStake      uint64           `json:"total_stake"`
 	RewardPerBlock  uint64           `json:"reward_per_block"`

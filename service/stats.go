@@ -151,17 +151,18 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	log.Printf("block seqno=%d time=%s", blockIDExt.Seqno, blockTime.UTC().Format(time.RFC3339))
 
+	// Validation round timing from config param 34.
+	roundSince, roundUntil := getRoundInfo(conf)
+
 	out := model.Output{
 		Block: model.BlockInfo{
 			Seqno: blockIDExt.Seqno,
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
+		ElectionID:     int64(roundSince),
 		ElectorBalance: electorBalance,
 		RewardPerBlock: rewardPerBlock,
 	}
-
-	// Validation round timing from config param 34.
-	roundSince, roundUntil := getRoundInfo(conf)
 	out.ValidationRound = model.RoundInfo{
 		Start: time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
 		End:   time.Unix(int64(roundUntil), 0).UTC().Format(time.RFC3339),
