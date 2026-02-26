@@ -2,12 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math/big"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/tonkeeper/tongo/abi"
@@ -32,6 +32,43 @@ type cachedPoolInfo struct {
 
 var poolTypeCache sync.Map // ton.AccountID → cachedPoolInfo
 
+// Pool type identifiers returned in the API response.
+const (
+	poolTypeNominatorV10       = "nominator-pool-v1.0"
+	poolTypeSingleNominatorV10 = "single-nominator-pool-v1.0"
+	poolTypeSingleNominatorV11 = "single-nominator-pool-v1.1"
+	poolTypeOther              = "other"
+)
+
+// Known contract code hashes for deterministic pool type detection.
+func mustDecodeHash(s string) [32]byte {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 {
+		panic("invalid hash: " + s)
+	}
+	return [32]byte(b)
+}
+
+var (
+	nominatorPoolCodeHash      = mustDecodeHash("9a3ec14bc098f6b44064c305222caea2800f17dda85ee6a8198a7095ede10dcf")
+	singleNominatorV10CodeHash = mustDecodeHash("a42ae69eac76ffe0e452d3d4f13d387a14e46c01a5aadba5fc1d893e6c71f5ba")
+	singleNominatorV11CodeHash = mustDecodeHash("cc0d39589eb2c0cfe0fde28456657a3bdd3d953955ae3f98f25664ab3c904fbd")
+)
+
+// poolTypeByCodeHash returns the pool type for a known code hash, or "" if unknown.
+func poolTypeByCodeHash(hash [32]byte) string {
+	switch hash {
+	case nominatorPoolCodeHash:
+		return poolTypeNominatorV10
+	case singleNominatorV10CodeHash:
+		return poolTypeSingleNominatorV10
+	case singleNominatorV11CodeHash:
+		return poolTypeSingleNominatorV11
+	default:
+		return ""
+	}
+}
+
 var pastElectionsCache struct {
 	sync.Mutex
 	electionIDs []int64 // sorted electAt values used as cache key
@@ -50,17 +87,16 @@ type poolData struct {
 	Nominators             *abi.ListNominatorsResult
 }
 
-// fetchPoolData determines the pool type and, for nominator pools, returns
-// enriched pool data from GetPoolData + ListNominators.
+// fetchPoolData determines the pool type by contract code hash and, for known
+// pool types, fetches enriched pool data.
 //
-// Detection order:
-//  1. ListNominators — succeeds → "Nominator Pool" (TvPool with nominators)
-//  2. GetPoolData TfResult — succeeds → "Single Nominator" (TF-family, no nominators)
-//  3. None matched → "Other"
+// Detection: a single GetAccountState call retrieves the contract code hash,
+// which is matched against known pool contract hashes. This is deterministic
+// and avoids multiple heuristic RPC probes.
 //
-// All types except "Nominator Pool" are cached (they have no per-request data).
+// All types except nominator pools are cached (they have no per-request data).
 // Network errors skip detection entirely and return ("", nil) without caching.
-func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (string, *poolData) {
+func fetchPoolData(ctx context.Context, client *liteapi.Client, poolAddr ton.AccountID) (string, *poolData) {
 	// Fast path: confirmed type from a previous call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
 		info := cached.(cachedPoolInfo)
@@ -74,59 +110,85 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 		return info.Type, nil
 	}
 
-	// Step 1: ListNominators — authoritative for Nominator Pool detection.
+	// Fetch account state to determine pool type by code hash (1 RPC call).
 	model.CountRPC(ctx)
-	_, lnResult, lnErr := abi.ListNominators(ctx, executor, poolAddr)
-	if lnErr != nil && !strings.Contains(lnErr.Error(), "method execution failed") {
-		// Network error — don't try other methods, don't cache.
+	st, err := client.GetAccountState(ctx, poolAddr)
+	if err != nil {
 		return "", nil
 	}
-	if lnErr == nil {
-		if noms, ok := lnResult.(abi.ListNominatorsResult); ok {
-			// Confirmed Nominator Pool — build poolData.
-			pd := &poolData{Nominators: &noms, NominatorsAmount: new(big.Int)}
-			for _, n := range noms.Nominators {
-				pd.NominatorsAmount.Add(pd.NominatorsAmount, new(big.Int).SetUint64(n.Amount))
-			}
-			// Enrich with GetPoolData (validator amount, reward share, etc.).
-			model.CountRPC(ctx)
-			_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
-			if gpErr == nil {
-				if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-					pd.ValidatorAmount = new(big.Int).SetInt64(tf.ValidatorAmount)
-					pd.RewardShare = tf.ValidatorRewardShare
-					pd.NominatorsCount = tf.NominatorsCount
-					pd.ValidatorAddress = tf.ValidatorAddress
-				}
-			}
-			return "Nominator Pool", pd
-		}
+	if st.Account.SumType != "Account" {
+		return "", nil
+	}
+	state := st.Account.Account.Storage.State
+	if state.SumType != "AccountActive" {
+		return "", nil
+	}
+	code := state.AccountActive.StateInit.Code
+	if !code.Exists {
+		poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: poolTypeOther})
+		return poolTypeOther, nil
+	}
+	codeHash, err := code.Value.Value.Hash256()
+	if err != nil {
+		return "", nil
 	}
 
-	// Step 2: GetPoolData TfResult — TF-family contract without list_nominators
-	// means Single Nominator (single-nominator-pool shares get_pool_data with TvPool).
-	model.CountRPC(ctx)
-	_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
-	if gpErr == nil {
-		if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-			pd := &poolData{ValidatorAddress: tf.ValidatorAddress}
-			if roles, ok := fetchPoolRoles(ctx, executor, poolAddr); ok {
-				pd.OwnerAddress = roles.OwnerAddress
-				pd.ValidatorWalletAddress = roles.ValidatorAddress
-			}
-			poolTypeCache.Store(poolAddr, cachedPoolInfo{
-				Type:                   "Single Nominator",
-				ValidatorAddress:       pd.ValidatorAddress,
-				OwnerAddress:           pd.OwnerAddress,
-				ValidatorWalletAddress: pd.ValidatorWalletAddress,
-			})
-			return "Single Nominator", pd
+	poolType := poolTypeByCodeHash(codeHash)
+	switch poolType {
+	case poolTypeNominatorV10:
+		// Fetch ListNominators + GetPoolData for full nominator data.
+		model.CountRPC(ctx)
+		_, lnResult, lnErr := abi.ListNominators(ctx, client, poolAddr)
+		if lnErr != nil {
+			return poolType, nil
 		}
-	}
+		noms, ok := lnResult.(abi.ListNominatorsResult)
+		if !ok {
+			return poolType, nil
+		}
+		pd := &poolData{Nominators: &noms, NominatorsAmount: new(big.Int)}
+		for _, n := range noms.Nominators {
+			pd.NominatorsAmount.Add(pd.NominatorsAmount, new(big.Int).SetUint64(n.Amount))
+		}
+		model.CountRPC(ctx)
+		_, gpResult, gpErr := abi.GetPoolData(ctx, client, poolAddr)
+		if gpErr == nil {
+			if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+				pd.ValidatorAmount = new(big.Int).SetInt64(tf.ValidatorAmount)
+				pd.RewardShare = tf.ValidatorRewardShare
+				pd.NominatorsCount = tf.NominatorsCount
+				pd.ValidatorAddress = tf.ValidatorAddress
+			}
+		}
+		return poolType, pd
 
-	// Step 3: No known type matched.
-	poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: "Other"})
-	return "Other", nil
+	case poolTypeSingleNominatorV10, poolTypeSingleNominatorV11:
+		// Fetch GetPoolData + fetchPoolRoles for validator/owner addresses.
+		pd := &poolData{}
+		model.CountRPC(ctx)
+		_, gpResult, gpErr := abi.GetPoolData(ctx, client, poolAddr)
+		if gpErr == nil {
+			if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
+				pd.ValidatorAddress = tf.ValidatorAddress
+			}
+		}
+		if roles, ok := fetchPoolRoles(ctx, client, poolAddr); ok {
+			pd.OwnerAddress = roles.OwnerAddress
+			pd.ValidatorWalletAddress = roles.ValidatorAddress
+		}
+		poolTypeCache.Store(poolAddr, cachedPoolInfo{
+			Type:                   poolType,
+			ValidatorAddress:       pd.ValidatorAddress,
+			OwnerAddress:           pd.OwnerAddress,
+			ValidatorWalletAddress: pd.ValidatorWalletAddress,
+		})
+		return poolType, pd
+
+	default:
+		// Unknown pool type — no further RPC calls.
+		poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: poolTypeOther})
+		return poolTypeOther, nil
+	}
 }
 
 type getRolesResult struct {

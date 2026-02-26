@@ -252,7 +252,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 				}
 			}
 
-			if pd == nil || poolType != "Nominator Pool" {
+			if pd == nil || poolType != poolTypeNominatorV10 {
 				// Non-Nominator Pool: fetch contract balance, approximate total.
 				contractBal, err := retry(func() (uint64, error) {
 					model.CountRPC(ctx)
@@ -324,7 +324,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					)
 				}
 				entries[i].Nominators = append(entries[i].Nominators, model.NominatorEntry{
-					Address:        addr.ToHuman(false, false),
+					Address:        addr.ToHuman(true, false),
 					Weight:         nomWeight,
 					PerBlockReward: &model.BigInt{Int: *nomPerBlock},
 					EffectiveStake: &model.BigInt{Int: *nomStaked},
