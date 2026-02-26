@@ -1,0 +1,249 @@
+openapi: 3.0.3
+info:
+  title: TON Validators Statistics API
+  description: >
+    Returns current TON validator statistics — stakes, per-block rewards,
+    pool addresses, and nominator breakdowns — fetched directly from TON
+    liteservers.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security: []
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/validators:
+    get:
+      operationId: getValidators
+      summary: Get all current validators
+      description: >
+        Returns all current validators with stakes, rewards, pool addresses,
+        and (optionally) nominator breakdowns.
+      parameters:
+        - name: seqno
+          in: query
+          description: Masterchain block seqno. Defaults to latest.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+        - name: nominators
+          in: query
+          description: Set to `false` to skip nominator data.
+          required: false
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "true"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidatorsResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    NanoTON:
+      type: string
+      description: Amount in nanoTON, encoded as a decimal string to preserve precision.
+      example: "457752122739238021"
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "invalid seqno \"abc\": strconv.ParseUint: parsing \"abc\": invalid syntax"
+
+    BlockInfo:
+      type: object
+      required: [seqno, time]
+      properties:
+        seqno:
+          type: integer
+          format: uint32
+          description: Masterchain block sequence number.
+          example: 57486221
+        time:
+          type: string
+          format: date-time
+          description: Block timestamp (UTC, RFC 3339).
+          example: "2026-02-20T13:51:37Z"
+
+    RoundInfo:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Validation round start time.
+          example: "2026-02-20T12:09:44Z"
+        end:
+          type: string
+          format: date-time
+          description: Validation round end time.
+          example: "2026-02-21T06:22:00Z"
+
+    NominatorEntry:
+      type: object
+      required: [address, weight, per_block_reward, effective_stake, stake]
+      properties:
+        address:
+          type: string
+          description: Nominator's wallet address (bounceable, base64url).
+          example: "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB"
+        weight:
+          type: number
+          format: double
+          description: Nominator's share of total nominators' deposit (0–1).
+          example: 0.15
+        per_block_reward:
+          $ref: "#/components/schemas/NanoTON"
+        effective_stake:
+          $ref: "#/components/schemas/NanoTON"
+        stake:
+          $ref: "#/components/schemas/NanoTON"
+
+    ValidatorEntry:
+      type: object
+      required: [rank, pubkey, effective_stake, weight, per_block_reward]
+      properties:
+        rank:
+          type: integer
+          description: Position sorted by effective stake (descending).
+          example: 1
+        pubkey:
+          type: string
+          description: Validator's public key (hex-encoded Ed25519).
+          example: "e33f0e53552f951e0a27c8e5a461a1bd65975af369a2c85a06e51f7fbb8ae667"
+        effective_stake:
+          $ref: "#/components/schemas/NanoTON"
+        weight:
+          type: number
+          format: double
+          description: Fraction of total effective stake (0–1).
+          example: 0.004648
+        per_block_reward:
+          $ref: "#/components/schemas/NanoTON"
+        pool:
+          type: string
+          description: Pool smart contract address (bounceable, base64url).
+          example: "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI"
+        pool_type:
+          type: string
+          description: Contract type detected by code hash.
+          enum:
+            - nominator-pool-v1.0
+            - single-nominator-pool-v1.0
+            - single-nominator-pool-v1.1
+            - other
+          example: "nominator-pool-v1.0"
+        owner_address:
+          type: string
+          description: Owner who deposited funds. Single-nominator pools only.
+          example: "EQB7..."
+        validator_address:
+          type: string
+          description: Validator's wallet address (controls the node).
+          example: "Ef9T..."
+        validator_stake:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: Validator's own funds deposited into the pool. Nominator pool only.
+        nominators_stake:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: Sum of all nominator deposits. Nominator pool only.
+        total_stake:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Total funds in the pool. For nominator pools: validator_stake + nominators_stake.
+                For others: approximated from contract balance + effective stake.
+        validator_reward_share:
+          type: number
+          format: double
+          description: Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator pool only.
+          example: 0.3
+        nominators_count:
+          type: integer
+          format: uint32
+          description: Number of nominators in the pool. Nominator pool only.
+          example: 12
+        nominators:
+          type: array
+          description: Individual nominators. Nominator pool only.
+          items:
+            $ref: "#/components/schemas/NominatorEntry"
+
+    ValidatorsResponse:
+      type: object
+      required:
+        - response_time_ms
+        - block
+        - validation_round
+        - election_id
+        - elector_balance
+        - total_stake
+        - reward_per_block
+        - validators
+      properties:
+        response_time_ms:
+          type: integer
+          format: int64
+          description: Server-side response time in milliseconds.
+          example: 12345
+        block:
+          $ref: "#/components/schemas/BlockInfo"
+        validation_round:
+          $ref: "#/components/schemas/RoundInfo"
+        election_id:
+          type: integer
+          format: int64
+          description: Current election ID (electAt timestamp).
+          example: 1740053384
+        elector_balance:
+          $ref: "#/components/schemas/NanoTON"
+        total_stake:
+          $ref: "#/components/schemas/NanoTON"
+        reward_per_block:
+          $ref: "#/components/schemas/NanoTON"
+        validators:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidatorEntry"

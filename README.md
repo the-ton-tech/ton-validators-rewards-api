@@ -26,6 +26,14 @@ On first launch the TON global config is downloaded and cached in memory for 7 d
 
 ## API
 
+### `GET /swagger`
+
+Swagger UI for interactive API exploration.
+
+### `GET /api/openapi.yaml`
+
+Raw OpenAPI 3.0 specification.
+
 ### `GET /health`
 
 Returns `{"status":"ok"}`.
@@ -135,7 +143,8 @@ Key distinction: `stake` / `total_stake` is what was deposited into the pool, wh
 ## Project structure
 
 ```
-main.go                Entry point — wires service and API layers
+main.go                Entry point — wires service, API, and Swagger routes
+openapi.yaml           OpenAPI 3.0 specification (embedded in binary)
 model/model.go         JSON response types
 model/rpccount.go      Per-request RPC call counter (context-based)
 service/service.go     Service struct with DI for liteapi client
@@ -144,6 +153,7 @@ service/stats.go       FetchStats() — core data-fetching orchestrator
 service/pool.go        Pool type detection (by code hash), past_elections parsing
 service/blockchain.go  Block lookup, round info, validator extraction
 api/handler.go         HTTP handlers, ValidatorService interface
+api/swagger.go         Swagger UI HTML template
 Dockerfile             Multi-stage build (scratch)
 ```
 
