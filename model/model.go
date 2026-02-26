@@ -53,7 +53,6 @@ type RoundInfo struct {
 }
 
 type ValidatorEntry struct {
-	ResponseTimeMs       int64            `json:"response_time_ms,omitempty"`
 	Rank                 int              `json:"rank"`
 	Pubkey               string           `json:"pubkey"`
 	EffectiveStake       *BigInt          `json:"effective_stake"`

@@ -54,27 +54,32 @@ Response:
     "start": "2026-02-20T12:09:44Z",
     "end": "2026-02-21T06:22:00Z"
   },
-  "elector_balance": 966674188286983322,
-  "total_stake": 457752122739238021,
-  "reward_per_block": 2928989965,
+  "elector_balance": "966674188286983322",
+  "total_stake": "457752122739238021",
+  "reward_per_block": "2928989965",
   "validators": [
     {
       "rank": 1,
       "pubkey": "e33f0e53552f951e...",
-      "effective_stake": 2127654606060000,
+      "effective_stake": "2127654606060000",
       "weight": 0.004648,
-      "per_block_reward": 13614090,
-      "total_stake": 2376902585342169,
+      "per_block_reward": "13614090",
+      "total_stake": "2376902585342169",
       "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
+      "pool_type": "nominator-pool-v1.0",
       "owner_address": "EQB7...",
       "validator_address": "Ef9T...",
+      "validator_stake": "200000000000000",
+      "nominators_stake": "2176902585342169",
+      "validator_reward_share": 0.3,
+      "nominators_count": 1,
       "nominators": [
         {
-          "address": "Ef9dcnCvPwcmBf-JbyIyY47LYCJ3obFCpRG-XhXMV1er1myc",
+          "address": "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB",
           "weight": 1.0,
-          "per_block_reward": 13614090,
-          "effective_stake": 2127654606060000,
-          "stake": 2376902585342169
+          "per_block_reward": "13614090",
+          "effective_stake": "2127654606060000",
+          "stake": "2176902585342169"
         }
       ]
     }
@@ -106,32 +111,26 @@ Response:
 | `per_block_reward` | Estimated reward this validator earns per masterchain block (nanoTON) |
 | `pool` | Pool smart contract address (bounceable, base64url) |
 | `validator_address` | Validator's wallet address (the one that controls the node) |
-| `owner_address` | The single owner who deposited funds. Only present for Single Nominator pools |
-| `pool_type` | Contract type: `"Nominator Pool"`, `"Single Nominator"`, etc. |
-| `validator_stake` | Validator's own funds deposited into the pool (nanoTON). Nominator Pool only |
-| `nominators_stake` | Sum of all nominator deposits in the pool (nanoTON). Nominator Pool only |
-| `total_stake` | Total funds in the pool. For Nominator Pool: `validator_stake + nominators_stake`. For others: approximated from contract balance + effective stake |
-| `validator_reward_share` | Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator Pool only |
-| `nominators_count` | Number of nominators in the pool. Nominator Pool only |
-| `nominators` | List of individual nominators. Nominator Pool only |
+| `owner_address` | The single owner who deposited funds. Only present for single-nominator pools |
+| `pool_type` | Contract type: `"nominator-pool-v1.0"`, `"single-nominator-pool-v1.0"`, `"single-nominator-pool-v1.1"`, or `"other"` |
+| `validator_stake` | Validator's own funds deposited into the pool (nanoTON). Nominator pool only |
+| `nominators_stake` | Sum of all nominator deposits in the pool (nanoTON). Nominator pool only |
+| `total_stake` | Total funds in the pool. For nominator pools: `validator_stake + nominators_stake`. For others: approximated from contract balance + effective stake |
+| `validator_reward_share` | Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator pool only |
+| `nominators_count` | Number of nominators in the pool. Nominator pool only |
+| `nominators` | List of individual nominators. Nominator pool only |
 
 #### Nominator fields (inside `nominators` array)
 
 | Field | Description |
 |---|---|
-| `address` | Nominator's wallet address (non-bounceable, base64url) |
+| `address` | Nominator's wallet address (bounceable, base64url) |
 | `weight` | Nominator's share of the total nominators' deposit (0–1) |
 | `per_block_reward` | Estimated per-block reward after the validator's cut (nanoTON) |
 | `effective_stake` | Nominator's proportional share of the effective stake locked in the Elector (nanoTON) |
 | `stake` | Nominator's raw deposit in the pool contract (nanoTON) |
 
 Key distinction: `stake` / `total_stake` is what was deposited into the pool, while `effective_stake` is what the Elector actually locked. These differ because the Elector may accept less than the full pool balance.
-
-### `GET /api/validators/{pubkey}`
-
-Returns a single validator entry by hex public key.
-
-Query parameters: same as above (`seqno`, `nominators`).
 
 ## Project structure
 
@@ -142,7 +141,7 @@ model/rpccount.go      Per-request RPC call counter (context-based)
 service/service.go     Service struct with DI for liteapi client
 service/client.go      TON lite client initialization + config caching
 service/stats.go       FetchStats() — core data-fetching orchestrator
-service/pool.go        Pool detection, past_elections parsing
+service/pool.go        Pool type detection (by code hash), past_elections parsing
 service/blockchain.go  Block lookup, round info, validator extraction
 api/handler.go         HTTP handlers, ValidatorService interface
 Dockerfile             Multi-stage build (scratch)
@@ -163,7 +162,8 @@ main → api     → model
 2. Resolves the target masterchain block (latest or by seqno)
 3. Fetches in parallel: config param 34 (validators), past elections (pool addresses + stakes), elector balance, and block reward
 4. Past elections data is cached by election IDs — reparsed only when elections change
-5. Optionally fetches nominator lists for each pool in parallel (up to 100 concurrent RPC calls)
-6. Returns the assembled JSON response
+5. Detects pool type by matching contract code hash (single `GetAccountState` call per pool)
+6. Optionally fetches nominator lists for each pool in parallel
+7. Returns the assembled JSON response
 
 All TON amount values are in nanoTON.

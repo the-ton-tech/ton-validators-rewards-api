@@ -24,7 +24,6 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	mux.HandleFunc("GET /api/validators/{pubkey}", apiSvc.HandleValidatorByPubkey)
 	mux.HandleFunc("GET /api/validators", apiSvc.HandleValidators)
 
 	port := os.Getenv("PORT")

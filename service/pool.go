@@ -111,8 +111,10 @@ func fetchPoolData(ctx context.Context, client *liteapi.Client, poolAddr ton.Acc
 	}
 
 	// Fetch account state to determine pool type by code hash (1 RPC call).
-	model.CountRPC(ctx)
-	st, err := client.GetAccountState(ctx, poolAddr)
+	st, err := retry(func() (tlb.ShardAccount, error) {
+		model.CountRPC(ctx)
+		return client.GetAccountState(ctx, poolAddr)
+	})
 	if err != nil {
 		return "", nil
 	}
