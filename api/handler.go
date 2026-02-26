@@ -51,7 +51,7 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 	out.ResponseTimeMs = elapsed.Milliseconds()
 	log.Printf("GET /api/validators: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // handleValidatorByPubkey handles GET /api/validators/{pubkey}.
@@ -81,7 +81,7 @@ func (h *Service) HandleValidatorByPubkey(w http.ResponseWriter, r *http.Request
 			v.ResponseTimeMs = elapsed.Milliseconds()
 			log.Printf("GET /api/validators/%s: %dms, %d RPC calls", pubkey, elapsed.Milliseconds(), model.RPCCount(ctx))
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(v)
+			_ = json.NewEncoder(w).Encode(v)
 			return
 		}
 	}
@@ -93,7 +93,7 @@ func (h *Service) HandleValidatorByPubkey(w http.ResponseWriter, r *http.Request
 func writeError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 // parseSeqno extracts the optional seqno query parameter from the request.

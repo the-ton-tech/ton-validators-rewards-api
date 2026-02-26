@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/big"
 	"sort"
 	"time"
 
@@ -65,8 +66,8 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	var (
 		conf           *ton.BlockchainConfig
 		pools          map[tlb.Bits256]poolEntry
-		electorBalance uint64
-		rewardPerBlock uint64
+		electorBalance = new(big.Int)
+		rewardPerBlock = new(big.Int)
 	)
 
 	g := new(errgroup.Group)
@@ -124,7 +125,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return uint64(st.Account.Account.Storage.Balance.Grams), nil
 		})
 		if err == nil {
-			electorBalance = bal
+			electorBalance.SetUint64(bal)
 		}
 		return nil
 	})
@@ -140,7 +141,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return uint64(block.ValueFlow.FeesCollected.Grams), nil
 		})
 		if err == nil {
-			rewardPerBlock = reward
+			rewardPerBlock.SetUint64(reward)
 		}
 		return nil
 	})
@@ -160,8 +161,8 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
 		ElectionID:     int64(roundSince),
-		ElectorBalance: electorBalance,
-		RewardPerBlock: rewardPerBlock,
+		ElectorBalance: &model.BigInt{Int: *electorBalance},
+		RewardPerBlock: &model.BigInt{Int: *rewardPerBlock},
 	}
 	out.ValidationRound = model.RoundInfo{
 		Start: time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
@@ -173,38 +174,39 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	log.Printf("active validators: %d", len(validators))
 
 	// Total true stake: sum only for current active validators.
-	var totalTrueStake uint64
+	totalTrueStake := new(big.Int)
 	for _, v := range validators {
 		if pe, ok := pools[v.PubKey()]; ok {
-			totalTrueStake += pe.TrueStake
+			totalTrueStake.Add(totalTrueStake, pe.TrueStake)
 		}
 	}
-	out.TotalStake = totalTrueStake
-	log.Printf("total true stake (active validators): %.2f TON", float64(totalTrueStake)/1e9)
+	out.TotalStake = &model.BigInt{Int: *totalTrueStake}
+	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
 	type validatorRow struct {
 		v          tlb.ValidatorDescr
-		trueStake  uint64
-		perBlockNT uint64
+		trueStake  *big.Int
+		perBlockNT *big.Int
 		pool       string
 		poolAddr   *ton.AccountID
 	}
 	rows := make([]validatorRow, len(validators))
 	for i, v := range validators {
 		pk := v.PubKey()
-		row := validatorRow{v: v}
+		row := validatorRow{v: v, trueStake: new(big.Int), perBlockNT: new(big.Int)}
 		if pe, ok := pools[pk]; ok {
 			row.pool = pe.Addr.ToHuman(true, false)
 			addr := pe.Addr
 			row.poolAddr = &addr
-			row.trueStake = pe.TrueStake
-			if rewardPerBlock > 0 && totalTrueStake > 0 {
-				row.perBlockNT = uint64(float64(rewardPerBlock) * float64(pe.TrueStake) / float64(totalTrueStake))
+			row.trueStake.Set(pe.TrueStake)
+			if rewardPerBlock.Sign() > 0 && totalTrueStake.Sign() > 0 {
+				// perBlockNT = rewardPerBlock * trueStake / totalTrueStake
+				row.perBlockNT.Div(new(big.Int).Mul(rewardPerBlock, pe.TrueStake), totalTrueStake)
 			}
 		}
 		rows[i] = row
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].trueStake > rows[j].trueStake })
+	sort.Slice(rows, func(i, j int) bool { return rows[i].trueStake.Cmp(rows[j].trueStake) > 0 })
 
 	// Collect nominators and build final validator list (parallel).
 	entries := make([]model.ValidatorEntry, len(rows))
@@ -212,16 +214,20 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	for i, row := range rows {
 		pk := row.v.PubKey()
+		_ = pk
 		var share float64
-		if totalTrueStake > 0 {
-			share = float64(row.trueStake) / float64(totalTrueStake)
+		if totalTrueStake.Sign() > 0 {
+			share, _ = new(big.Float).Quo(
+				new(big.Float).SetInt(row.trueStake),
+				new(big.Float).SetInt(totalTrueStake),
+			).Float64()
 		}
 		entries[i] = model.ValidatorEntry{
 			Rank:           i + 1,
-			Pubkey:         fmt.Sprintf("%x", pk[:]),
-			EffectiveStake: row.trueStake,
+			Pubkey:         fmt.Sprintf("%x", row.v.PubKey()),
+			EffectiveStake: &model.BigInt{Int: *row.trueStake},
 			Weight:         share,
-			PerBlockReward: row.perBlockNT,
+			PerBlockReward: &model.BigInt{Int: *row.perBlockNT},
 			Pool:           row.pool,
 		}
 
@@ -257,20 +263,27 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 					return uint64(st.Account.Account.Storage.Balance.Grams), nil
 				})
 				if err == nil {
-					entries[i].TotalStake = contractBal + rows[i].trueStake
+					total := new(big.Int).Add(new(big.Int).SetUint64(contractBal), rows[i].trueStake)
+					entries[i].TotalStake = &model.BigInt{Int: *total}
 				}
 				return nil
 			}
 
 			// Nominator Pool: use data from GetPoolData + ListNominators.
-			entries[i].ValidatorStake = pd.ValidatorAmount
-			entries[i].NominatorsStake = pd.NominatorsAmount
-			entries[i].TotalStake = entries[i].ValidatorStake + entries[i].NominatorsStake
-			// ValidatorRewardShare is stored on-chain as a uint32 in range [0, 10000],
-			// where 10000 = 100%. The nominator pool contract (pool.fc) computes:
-			//   validator_reward = reward * validator_reward_share / 10000
-			// For example, 3000 means the validator keeps 30% of rewards.
-			// See: https://github.com/ton-blockchain/nominator-pool/blob/main/func/pool.fc
+			if pd.ValidatorAmount != nil {
+				entries[i].ValidatorStake = &model.BigInt{Int: *pd.ValidatorAmount}
+			}
+			if pd.NominatorsAmount != nil {
+				entries[i].NominatorsStake = &model.BigInt{Int: *pd.NominatorsAmount}
+			}
+			totalPoolStake := new(big.Int)
+			if pd.ValidatorAmount != nil {
+				totalPoolStake.Add(totalPoolStake, pd.ValidatorAmount)
+			}
+			if pd.NominatorsAmount != nil {
+				totalPoolStake.Add(totalPoolStake, pd.NominatorsAmount)
+			}
+			entries[i].TotalStake = &model.BigInt{Int: *totalPoolStake}
 			entries[i].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
 			entries[i].NominatorsCount = pd.NominatorsCount
 
@@ -280,33 +293,48 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 			totalAmount := pd.NominatorsAmount
 			// Nominator share of true_stake: nominators don't own the validator's own stake.
-			nominatorsStake := rows[i].trueStake
-			if totalAmount < nominatorsStake {
-				nominatorsStake = totalAmount
+			nominatorsStake := new(big.Int).Set(rows[i].trueStake)
+			if totalAmount != nil && totalAmount.Cmp(nominatorsStake) < 0 {
+				nominatorsStake.Set(totalAmount)
 			}
 
-			nominatorRewardShare := 1.0 - float64(pd.RewardShare)/10000.0
+			rewardShare := big.NewInt(int64(pd.RewardShare))
+			tenThousand := big.NewInt(10000)
+
 			for _, n := range pd.Nominators.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
+				nAmount := new(big.Int).SetUint64(n.Amount)
 				var nomWeight float64
-				var nomPerBlock, nomStaked uint64
-				if totalAmount > 0 {
-					nomWeight = float64(n.Amount) / float64(totalAmount)
-					nomStaked = uint64(float64(nominatorsStake) * float64(n.Amount) / float64(totalAmount))
-					nomPerBlock = uint64(float64(rows[i].perBlockNT) * nominatorRewardShare * float64(n.Amount) / float64(totalAmount))
+				nomPerBlock := new(big.Int)
+				nomStaked := new(big.Int)
+				if totalAmount != nil && totalAmount.Sign() > 0 {
+					nomWeight, _ = new(big.Float).Quo(
+						new(big.Float).SetInt(nAmount),
+						new(big.Float).SetInt(totalAmount),
+					).Float64()
+					// nomStaked = nominatorsStake * nAmount / totalAmount
+					nomStaked.Div(new(big.Int).Mul(nominatorsStake, nAmount), totalAmount)
+					// nomPerBlock = rewardPerBlock * nomStaked * (10000 - rewardShare) / (totalTrueStake * 10000)
+					nomPerBlock.Div(
+						new(big.Int).Mul(
+							new(big.Int).Mul(rewardPerBlock, nomStaked),
+							new(big.Int).Sub(tenThousand, rewardShare),
+						),
+						new(big.Int).Mul(totalTrueStake, tenThousand),
+					)
 				}
 				entries[i].Nominators = append(entries[i].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(false, false),
 					Weight:         nomWeight,
-					PerBlockReward: nomPerBlock,
-					EffectiveStake: nomStaked,
-					Stake:          uint64(n.Amount),
+					PerBlockReward: &model.BigInt{Int: *nomPerBlock},
+					EffectiveStake: &model.BigInt{Int: *nomStaked},
+					Stake:          &model.BigInt{Int: *nAmount},
 				})
 			}
 			return nil
 		})
 	}
-	g2.Wait()
+	_ = g2.Wait()
 
 	out.Validators = entries
 	return &out, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/big"
 	"slices"
 	"sort"
 	"strings"
@@ -39,8 +40,8 @@ var pastElectionsCache struct {
 
 // poolData holds data returned by GetPoolData + ListNominators for nominator pools.
 type poolData struct {
-	ValidatorAmount        uint64
-	NominatorsAmount       uint64
+	ValidatorAmount        *big.Int
+	NominatorsAmount       *big.Int
 	RewardShare            uint32
 	NominatorsCount        uint32
 	ValidatorAddress       tlb.Bits256
@@ -83,16 +84,16 @@ func fetchPoolData(ctx context.Context, executor abi.Executor, poolAddr ton.Acco
 	if lnErr == nil {
 		if noms, ok := lnResult.(abi.ListNominatorsResult); ok {
 			// Confirmed Nominator Pool — build poolData.
-			pd := &poolData{Nominators: &noms}
+			pd := &poolData{Nominators: &noms, NominatorsAmount: new(big.Int)}
 			for _, n := range noms.Nominators {
-				pd.NominatorsAmount += uint64(n.Amount)
+				pd.NominatorsAmount.Add(pd.NominatorsAmount, new(big.Int).SetUint64(n.Amount))
 			}
 			// Enrich with GetPoolData (validator amount, reward share, etc.).
 			model.CountRPC(ctx)
 			_, gpResult, gpErr := abi.GetPoolData(ctx, executor, poolAddr)
 			if gpErr == nil {
 				if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-					pd.ValidatorAmount = uint64(tf.ValidatorAmount)
+					pd.ValidatorAmount = new(big.Int).SetInt64(tf.ValidatorAmount)
 					pd.RewardShare = tf.ValidatorRewardShare
 					pd.NominatorsCount = tf.NominatorsCount
 					pd.ValidatorAddress = tf.ValidatorAddress
@@ -167,7 +168,7 @@ type frozenMember struct {
 // poolEntry holds a validator's pool address and true stake from the frozen election.
 type poolEntry struct {
 	Addr      ton.AccountID
-	TrueStake uint64 // actual effective stake in nTON, from frozen election leaf
+	TrueStake *big.Int // actual effective stake in nTON, from frozen election leaf
 }
 
 // getAllPoolAddresses returns a map from validator pubkey to poolEntry.
@@ -260,7 +261,7 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 		for _, item := range ed.members.Items() {
 			merged[item.Key] = poolEntry{
 				Addr:      ton.AccountID{Workchain: -1, Address: [32]byte(item.Value.SrcAddr)},
-				TrueStake: uint64(item.Value.TrueStake),
+				TrueStake: new(big.Int).SetUint64(uint64(item.Value.TrueStake)),
 			}
 		}
 	}
