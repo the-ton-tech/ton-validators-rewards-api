@@ -220,6 +220,19 @@ func fetchPoolRoles(ctx context.Context, executor abi.Executor, poolAddr ton.Acc
 	return result, true
 }
 
+// extractBigInt extracts a *big.Int from a VmStackValue (VmStkTinyInt or VmStkInt).
+func extractBigInt(v tlb.VmStackValue) *big.Int {
+	switch v.SumType {
+	case "VmStkTinyInt":
+		return big.NewInt(v.VmStkTinyInt)
+	case "VmStkInt":
+		i := big.Int(v.VmStkInt)
+		return &i
+	default:
+		return nil
+	}
+}
+
 // frozenMember matches the TL-B layout of a member in past_elections hashmap:
 // src_addr:bits256 weight:uint64 true_stake:Grams banned:Bool
 type frozenMember struct {
@@ -232,12 +245,6 @@ type frozenMember struct {
 type poolEntry struct {
 	Addr      ton.AccountID
 	TrueStake *big.Int // actual effective stake in nTON, from frozen election leaf
-}
-
-// RawPastElection holds a single parsed past_elections tuple from the elector contract.
-type RawPastElection struct {
-	ElectAt int64
-	Fields  []tlb.VmStackValue
 }
 
 // fetchRawPastElections calls past_elections() on the elector contract and returns
@@ -266,11 +273,16 @@ func fetchRawPastElections(ctx context.Context, client *liteapi.Client, electorA
 	for _, el := range elections {
 		elTuple := el.VmStkTuple
 		fields, err := elTuple.Data.RecursiveToSlice(int(elTuple.Len))
-		if err != nil || len(fields) < 5 {
+		if err != nil || len(fields) < PastElFieldBonuses+1 {
 			continue
 		}
-		electAt := fields[0].VmStkTinyInt
-		parsed = append(parsed, RawPastElection{ElectAt: electAt, Fields: fields})
+		pe := RawPastElection{
+			ElectAt:    fields[PastElFieldElectionID].VmStkTinyInt,
+			FrozenDict: fields[PastElFieldFrozenDict],
+			TotalStake: extractBigInt(fields[PastElFieldTotalStake]),
+			Bonuses:    extractBigInt(fields[PastElFieldBonuses]),
+		}
+		parsed = append(parsed, pe)
 	}
 	return parsed, nil
 }
@@ -305,7 +317,7 @@ func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAdd
 	}
 	var allElections []electionData
 	for _, pe := range parsed {
-		membersCell := &pe.Fields[4].VmStkCell.Value
+		membersCell := &pe.FrozenDict.VmStkCell.Value
 		var members tlb.Hashmap[tlb.Bits256, frozenMember]
 		if err := tlb.Unmarshal(membersCell, &members); err != nil {
 			log.Printf("warning: parse members for election %d: %v", pe.ElectAt, err)

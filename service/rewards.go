@@ -136,11 +136,8 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		if el.ElectAt != electionID {
 			continue
 		}
-		// fields[5] = total_stake, fields[6] = bonuses
-		if len(el.Fields) > 6 {
-			electionTotalStake = extractBigInt(el.Fields[5])
-			bonuses = extractBigInt(el.Fields[6])
-		}
+		electionTotalStake = el.TotalStake
+		bonuses = el.Bonuses
 		break
 	}
 	if bonuses == nil {
@@ -312,15 +309,3 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	return out, nil
 }
 
-// extractBigInt extracts a *big.Int from a VmStackValue (VmStkTinyInt or VmStkInt).
-func extractBigInt(v tlb.VmStackValue) *big.Int {
-	switch v.SumType {
-	case "VmStkTinyInt":
-		return big.NewInt(v.VmStkTinyInt)
-	case "VmStkInt":
-		i := big.Int(v.VmStkInt)
-		return &i
-	default:
-		return nil
-	}
-}

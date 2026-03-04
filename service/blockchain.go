@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math/big"
 	"time"
 
 	"github.com/tonkeeper/tongo/liteapi"
@@ -20,6 +21,24 @@ var electorAddr = ton.AccountID{
 		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
 		0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
 	},
+}
+
+// past_elections tuple layout from elector-code.fc:
+// [election_id, unfreeze_at, stake_held, vset_hash, frozen_dict, total_stake, bonuses, complaints]
+// https://github.com/ton-blockchain/ton/blob/master/crypto/smartcont/elector-code.fc
+const (
+	PastElFieldElectionID = 0
+	PastElFieldFrozenDict = 4
+	PastElFieldTotalStake = 5
+	PastElFieldBonuses    = 6
+)
+
+// RawPastElection holds a single parsed past_elections tuple from the elector contract.
+type RawPastElection struct {
+	ElectAt    int64
+	FrozenDict tlb.VmStackValue // cell: hashmap of frozen members
+	TotalStake *big.Int         // nil if not available
+	Bonuses    *big.Int         // nil if not available
 }
 
 // lookupMasterchainBlock resolves a seqno to a BlockIDExt and returns the block time.

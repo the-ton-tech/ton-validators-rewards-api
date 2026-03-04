@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/ton"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/tonkeeper/validators-statistics/model"
 )
@@ -106,7 +107,7 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 	var rounds []roundInfo
 	var walkErr string
 
-	// --- Step 1: Resolve anchor round (sequential, ~3-4 RPCs) ---
+	// --- Step 1: Resolve anchor round
 	anchorSince, anchorUntil, err := getConfigParam34(ctx, client, anchorExt)
 	if err != nil {
 		walkErr = fmt.Sprintf("stopped after 0 rounds: %v", err)
@@ -164,42 +165,39 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 	remaining := limit - 1
 	if remaining > 0 && roundLength > 0 && startExt.Seqno > 1 {
 		parallelRounds := make([]roundInfo, remaining)
-		var wg sync.WaitGroup
+		g := new(errgroup.Group)
 
-		launched := 0
+		var launched atomic.Int32
 		for i := 1; i <= remaining; i++ {
 			offset := roundLength/2 + uint32(i-1)*roundLength
 			if offset >= startExt.Seqno {
-				parallelRounds[i-1].fetchErr = "estimated block below genesis"
-				continue
+				break
 			}
 			middleBlock := startExt.Seqno - offset
 
-			launched++
-			wg.Add(1)
-			go func(idx int, estMiddle uint32) {
-				defer wg.Done()
+			g.Go(func() error {
+				idx := int(launched.Add(1)) - 1
 
-				pinnedExt, _, pinErr := lookupMasterchainBlock(ctx, client, estMiddle)
+				pinnedExt, _, pinErr := lookupMasterchainBlock(ctx, client, middleBlock)
 				if pinErr != nil {
 					parallelRounds[idx].fetchErr = roundFetchErr(pinErr)
-					return
+					return nil
 				}
 
 				since, until, confErr := getConfigParam34(ctx, client, pinnedExt)
 				if confErr != nil {
 					parallelRounds[idx].fetchErr = roundFetchErr(confErr)
-					return
+					return nil
 				}
 				if since == 0 {
 					parallelRounds[idx].fetchErr = "empty config param 34"
-					return
+					return nil
 				}
 
 				sExt, sErr := lookupMasterchainBlockByUtime(ctx, client, since)
 				if sErr != nil {
 					parallelRounds[idx].fetchErr = roundFetchErr(sErr)
-					return
+					return nil
 				}
 
 				parallelRounds[idx] = roundInfo{
@@ -209,16 +207,23 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 					startBlock: sExt.Seqno,
 					finished:   true,
 				}
-			}(i-1, middleBlock)
+				return nil
+			})
 		}
 
-		wg.Wait()
+		err = g.Wait()
+		n := int(launched.Load())
+		if err != nil {
+			walkErr = fmt.Sprintf("stopped after %d rounds: %v", n, err)
+			log.Printf("warning: %s", walkErr)
+			return buildRoundsOutput(rounds, walkErr), nil
+		}
 
-		sort.Slice(parallelRounds[:launched], func(i, j int) bool {
+		sort.Slice(parallelRounds[:n], func(i, j int) bool {
 			return parallelRounds[i].electionID > parallelRounds[j].electionID
 		})
 
-		rounds = append(rounds, parallelRounds[:launched]...)
+		rounds = append(rounds, parallelRounds[:n]...)
 	}
 
 	// Derive end_block for rounds after the anchor.
