@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/tonkeeper/tongo/abi"
-	"github.com/tonkeeper/tongo/contract/elector"
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
@@ -235,24 +234,16 @@ type poolEntry struct {
 	TrueStake *big.Int // actual effective stake in nTON, from frozen election leaf
 }
 
-// getAllPoolAddresses returns a map from validator pubkey to poolEntry.
-func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
-	// GetParticipantListExtended is informational logging only — fire and forget.
-	go func() {
-		model.CountRPC(ctx)
-		if list, err := elector.GetParticipantListExtended(ctx, electorAddr, client); err == nil && len(list.Validators) > 0 {
-			log.Printf("active election: id=%d, participants=%d, totalStake=%.2f TON",
-				list.ElectAt, len(list.Validators), float64(list.TotalStake)/1e9)
-		}
-	}()
-	return poolsFromPastElections(ctx, client, electorAddr)
+// RawPastElection holds a single parsed past_elections tuple from the elector contract.
+type RawPastElection struct {
+	ElectAt int64
+	Fields  []tlb.VmStackValue
 }
 
-// poolsFromPastElections traverses the members hashmap of each past election
-// to collect pubkey → poolEntry mappings.
-// Frozen member value layout: src_addr (256 bits) | weight (64 bits) | true_stake (Grams) | banned (1 bit).
-// Elections are processed in ascending electAt order so the newest data for each pubkey wins.
-func poolsFromPastElections(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
+// fetchRawPastElections calls past_elections() on the elector contract and returns
+// the parsed election tuples. This is shared between getAllPoolAddresses and
+// FetchValidationRounds.
+func fetchRawPastElections(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) ([]RawPastElection, error) {
 	stack, err := retry(func() (tlb.VmStack, error) {
 		model.CountRPC(ctx)
 		_, stack, err := client.RunSmcMethodByID(ctx, electorAddr, utils.MethodIdFromName("past_elections"), tlb.VmStack{})
@@ -271,13 +262,7 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 		return nil, fmt.Errorf("RecursiveToSlice: %w", err)
 	}
 
-	// Extract election IDs (cheap) and check cache.
-	type rawElection struct {
-		electAt int64
-		fields  []tlb.VmStackValue
-	}
-	parsed := make([]rawElection, 0, len(elections))
-	ids := make([]int64, 0, len(elections))
+	parsed := make([]RawPastElection, 0, len(elections))
 	for _, el := range elections {
 		elTuple := el.VmStkTuple
 		fields, err := elTuple.Data.RecursiveToSlice(int(elTuple.Len))
@@ -285,8 +270,22 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 			continue
 		}
 		electAt := fields[0].VmStkTinyInt
-		ids = append(ids, electAt)
-		parsed = append(parsed, rawElection{electAt: electAt, fields: fields})
+		parsed = append(parsed, RawPastElection{ElectAt: electAt, Fields: fields})
+	}
+	return parsed, nil
+}
+
+// getAllPoolAddresses returns a map from validator pubkey to poolEntry.
+func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
+	parsed, err := fetchRawPastElections(ctx, client, electorAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract election IDs (cheap) and check cache.
+	ids := make([]int64, 0, len(parsed))
+	for _, pe := range parsed {
+		ids = append(ids, pe.ElectAt)
 	}
 	slices.Sort(ids)
 
@@ -306,14 +305,14 @@ func poolsFromPastElections(ctx context.Context, client *liteapi.Client, elector
 	}
 	var allElections []electionData
 	for _, pe := range parsed {
-		membersCell := &pe.fields[4].VmStkCell.Value
+		membersCell := &pe.Fields[4].VmStkCell.Value
 		var members tlb.Hashmap[tlb.Bits256, frozenMember]
 		if err := tlb.Unmarshal(membersCell, &members); err != nil {
-			log.Printf("warning: parse members for election %d: %v", pe.electAt, err)
+			log.Printf("warning: parse members for election %d: %v", pe.ElectAt, err)
 			continue
 		}
-		log.Printf("past election id=%d: %d members", pe.electAt, len(members.Keys()))
-		allElections = append(allElections, electionData{electAt: pe.electAt, members: members})
+		log.Printf("past election id=%d: %d members", pe.ElectAt, len(members.Keys()))
+		allElections = append(allElections, electionData{electAt: pe.ElectAt, members: members})
 	}
 
 	sort.Slice(allElections, func(i, j int) bool {

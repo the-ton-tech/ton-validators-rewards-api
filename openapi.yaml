@@ -31,6 +31,106 @@ paths:
                     type: string
                     example: ok
 
+  /api/validation-rounds:
+    get:
+      operationId: getValidationRounds
+      summary: Get validation round metadata
+      description: >
+        Returns past and current validation rounds with boundaries, stakes,
+        and bonuses. Always uses the latest masterchain block.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of rounds to return.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 10
+        - name: election_id
+          in: query
+          description: >
+            Return the single round matching this election ID.
+            Mutually exclusive with `block`.
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: block
+          in: query
+          description: >
+            Find the round containing this masterchain block seqno and return
+            it plus up to `limit-1` older rounds. Mutually exclusive with
+            `election_id`.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationRoundsResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/round-rewards:
+    get:
+      operationId: getRoundRewards
+      summary: Get per-validator reward distribution for a finished round
+      description: >
+        Computes per-validator and per-nominator reward distribution for a
+        finished validation round using the elector's bonuses value.
+      parameters:
+        - name: election_id
+          in: query
+          description: >
+            Election ID of the finished round. Mutually exclusive with `block`.
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: block
+          in: query
+          description: >
+            Masterchain block seqno within the finished round.
+            Mutually exclusive with `election_id`.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoundRewardsResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/validators:
     get:
       operationId: getValidators
@@ -106,7 +206,7 @@ components:
 
     RoundInfo:
       type: object
-      required: [start, end]
+      required: [start, end, start_block, end_block]
       properties:
         start:
           type: string
@@ -118,6 +218,16 @@ components:
           format: date-time
           description: Validation round end time.
           example: "2026-02-21T06:22:00Z"
+        start_block:
+          type: integer
+          format: uint32
+          description: Masterchain block seqno at (or nearest to) validation round start.
+          example: 57480000
+        end_block:
+          type: integer
+          format: uint32
+          description: Masterchain block seqno at (or nearest to) validation round end.
+          example: 57546000
 
     NominatorEntry:
       type: object
@@ -247,3 +357,185 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ValidatorEntry"
+
+    ValidationRound:
+      type: object
+      required: [election_id, start, end, start_block, finished]
+      properties:
+        election_id:
+          type: integer
+          format: int64
+          description: Election ID (electAt timestamp).
+          example: 1740053384
+        start:
+          type: string
+          format: date-time
+          description: Validation round start time.
+          example: "2026-02-20T12:09:44Z"
+        end:
+          type: string
+          format: date-time
+          description: Validation round end time.
+          example: "2026-02-21T06:22:00Z"
+        start_block:
+          type: integer
+          format: uint32
+          description: Masterchain block seqno at (or nearest to) round start.
+          example: 57480000
+        end_block:
+          type: integer
+          format: uint32
+          description: Masterchain block seqno at (or nearest to) round end. Omitted if round hasn't finished.
+          example: 57546000
+        total_stake:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: Total stake locked in the round.
+        bonuses:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: Total rewards the elector pays for the round. Omitted if round hasn't finished.
+        finished:
+          type: boolean
+          description: Whether the validation round is complete.
+          example: true
+
+    ValidationRoundsResponse:
+      type: object
+      required: [response_time_ms, rounds]
+      properties:
+        response_time_ms:
+          type: integer
+          format: int64
+          description: Server-side response time in milliseconds.
+          example: 1234
+        rounds:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationRound"
+
+    NominatorRewardEntry:
+      type: object
+      required: [address, weight, reward, effective_stake, stake]
+      properties:
+        address:
+          type: string
+          description: Nominator's wallet address (bounceable, base64url).
+          example: "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB"
+        weight:
+          type: number
+          format: double
+          description: Nominator's share of total nominators' deposit (0–1).
+          example: 0.15
+        reward:
+          $ref: "#/components/schemas/NanoTON"
+        effective_stake:
+          $ref: "#/components/schemas/NanoTON"
+        stake:
+          $ref: "#/components/schemas/NanoTON"
+
+    ValidatorRewardEntry:
+      type: object
+      required: [rank, pubkey, effective_stake, weight, reward]
+      properties:
+        rank:
+          type: integer
+          description: Position sorted by effective stake (descending).
+          example: 1
+        pubkey:
+          type: string
+          description: Validator's public key (hex-encoded Ed25519).
+          example: "e33f0e53552f951e0a27c8e5a461a1bd65975af369a2c85a06e51f7fbb8ae667"
+        effective_stake:
+          $ref: "#/components/schemas/NanoTON"
+        weight:
+          type: number
+          format: double
+          description: Fraction of total effective stake (0–1).
+          example: 0.004648
+        reward:
+          $ref: "#/components/schemas/NanoTON"
+        pool:
+          type: string
+          description: Pool smart contract address (bounceable, base64url).
+          example: "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI"
+        pool_type:
+          type: string
+          description: Contract type detected by code hash.
+          enum:
+            - nominator-pool-v1.0
+            - single-nominator-pool-v1.0
+            - single-nominator-pool-v1.1
+            - other
+        owner_address:
+          type: string
+        validator_address:
+          type: string
+        validator_stake:
+          $ref: "#/components/schemas/NanoTON"
+        nominators_stake:
+          $ref: "#/components/schemas/NanoTON"
+        total_stake:
+          $ref: "#/components/schemas/NanoTON"
+        validator_reward_share:
+          type: number
+          format: double
+          description: Fraction of staking rewards kept by the validator (0.3 = 30%).
+          example: 0.3
+        nominators_count:
+          type: integer
+          format: uint32
+        nominators:
+          type: array
+          items:
+            $ref: "#/components/schemas/NominatorRewardEntry"
+
+    RoundRewardsResponse:
+      type: object
+      required:
+        - response_time_ms
+        - election_id
+        - round_start
+        - round_end
+        - start_block
+        - end_block
+        - total_bonuses
+        - total_stake
+        - validators
+      properties:
+        response_time_ms:
+          type: integer
+          format: int64
+          description: Server-side response time in milliseconds.
+          example: 5432
+        election_id:
+          type: integer
+          format: int64
+          description: Election ID (electAt timestamp).
+          example: 1740053384
+        round_start:
+          type: string
+          format: date-time
+          description: Validation round start time.
+        round_end:
+          type: string
+          format: date-time
+          description: Validation round end time.
+        start_block:
+          type: integer
+          format: uint32
+          description: First masterchain block of the round.
+        end_block:
+          type: integer
+          format: uint32
+          description: Last masterchain block of the round.
+        total_bonuses:
+          $ref: "#/components/schemas/NanoTON"
+        total_stake:
+          $ref: "#/components/schemas/NanoTON"
+        validators:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidatorRewardEntry"
+        error:
+          type: string

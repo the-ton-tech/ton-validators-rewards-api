@@ -155,6 +155,29 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	// Validation round timing from config param 34.
 	roundSince, roundUntil := getRoundInfo(conf)
 
+	// Resolve round start/end block seqnos in parallel.
+	var roundStartBlock, roundEndBlock uint32
+	g3 := new(errgroup.Group)
+	if roundSince > 0 {
+		g3.Go(func() error {
+			ext, err := lookupMasterchainBlockByUtime(ctx, client, roundSince)
+			if err == nil {
+				roundStartBlock = ext.Seqno
+			}
+			return nil
+		})
+	}
+	if roundUntil > 0 && time.Unix(int64(roundUntil), 0).Before(time.Now()) {
+		g3.Go(func() error {
+			ext, err := lookupMasterchainBlockByUtime(ctx, client, roundUntil)
+			if err == nil {
+				roundEndBlock = ext.Seqno
+			}
+			return nil
+		})
+	}
+	_ = g3.Wait()
+
 	out := model.Output{
 		Block: model.BlockInfo{
 			Seqno: blockIDExt.Seqno,
@@ -165,8 +188,10 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		RewardPerBlock: &model.BigInt{Int: *rewardPerBlock},
 	}
 	out.ValidationRound = model.RoundInfo{
-		Start: time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
-		End:   time.Unix(int64(roundUntil), 0).UTC().Format(time.RFC3339),
+		Start:      time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
+		End:        time.Unix(int64(roundUntil), 0).UTC().Format(time.RFC3339),
+		StartBlock: roundStartBlock,
+		EndBlock:   roundEndBlock,
 	}
 
 	// Current validators.

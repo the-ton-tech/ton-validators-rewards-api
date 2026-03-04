@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -14,12 +15,15 @@ import (
 var openapiSpec []byte
 
 func main() {
-	client, err := service.NewClientWithCachedConfig()
+	configPath := flag.String("config", "", "path to TON global config JSON (default: download from ton.org)")
+	flag.Parse()
+
+	client, err := service.NewClient(*configPath)
 	if err != nil {
 		log.Fatalf("client: %v", err)
 	}
 
-	svc := service.New(client)
+	svc := service.New(client, *configPath)
 	apiSvc := api.NewService(svc)
 	mux := http.NewServeMux()
 
@@ -29,6 +33,8 @@ func main() {
 	})
 
 	mux.HandleFunc("GET /api/validators", apiSvc.HandleValidators)
+	mux.HandleFunc("GET /api/validation-rounds", apiSvc.HandleValidationRounds)
+	mux.HandleFunc("GET /api/round-rewards", apiSvc.HandleRoundRewards)
 
 	mux.HandleFunc("GET /api/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")

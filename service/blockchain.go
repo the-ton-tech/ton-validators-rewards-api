@@ -63,6 +63,23 @@ func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
 	return since, until
 }
 
+// lookupMasterchainBlockByUtime resolves a unix timestamp to the nearest masterchain block.
+func lookupMasterchainBlockByUtime(ctx context.Context, client *liteapi.Client, utime uint32) (ton.BlockIDExt, error) {
+	blockID := ton.BlockID{
+		Workchain: -1,
+		Shard:     0x8000000000000000,
+	}
+	ext, err := retry(func() (ton.BlockIDExt, error) {
+		model.CountRPC(ctx)
+		ext, _, err := client.LookupBlock(ctx, blockID, 4, nil, &utime)
+		if err != nil {
+			return ton.BlockIDExt{}, err
+		}
+		return ext, nil
+	})
+	return ext, err
+}
+
 // extractValidators returns all ValidatorDescr entries from config param 34.
 // Handles both "validators#11" and "validators_ext#12" TL-B variants.
 func extractValidators(conf *ton.BlockchainConfig) []tlb.ValidatorDescr {

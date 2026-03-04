@@ -15,6 +15,8 @@ import (
 // ValidatorService describes the methods the API layer needs from the service layer.
 type ValidatorService interface {
 	FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error)
+	FetchValidationRounds(ctx context.Context, query model.RoundsQuery) (*model.ValidationRoundsOutput, error)
+	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery) (*model.RoundRewardsOutput, error)
 }
 
 // Handler holds dependencies for HTTP handlers.
@@ -50,6 +52,115 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start)
 	out.ResponseTimeMs = elapsed.Milliseconds()
 	log.Printf("GET /api/validators: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleValidationRounds handles GET /api/validation-rounds.
+func (h *Service) HandleValidationRounds(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := model.WithRPCCounter(r.Context())
+
+	q := model.RoundsQuery{Limit: 10}
+
+	if s := r.URL.Query().Get("limit"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil || v < 1 {
+			writeError(w, fmt.Sprintf("invalid limit %q", s), http.StatusBadRequest)
+			return
+		}
+		q.Limit = v
+	}
+
+	hasElection := r.URL.Query().Get("election_id") != ""
+	hasBlock := r.URL.Query().Get("block") != ""
+
+	if hasElection && hasBlock {
+		writeError(w, "election_id and block are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+
+	if hasElection {
+		v, err := strconv.ParseInt(r.URL.Query().Get("election_id"), 10, 64)
+		if err != nil {
+			writeError(w, fmt.Sprintf("invalid election_id %q: %v", r.URL.Query().Get("election_id"), err), http.StatusBadRequest)
+			return
+		}
+		q.ElectionID = &v
+	}
+
+	if hasBlock {
+		v, err := strconv.ParseUint(r.URL.Query().Get("block"), 10, 32)
+		if err != nil {
+			writeError(w, fmt.Sprintf("invalid block %q: %v", r.URL.Query().Get("block"), err), http.StatusBadRequest)
+			return
+		}
+		u := uint32(v)
+		q.Block = &u
+	}
+
+	out, err := h.svc.FetchValidationRounds(ctx, q)
+	if err != nil {
+		log.Printf("FetchValidationRounds error: %v", err)
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	elapsed := time.Since(start)
+	out.ResponseTimeMs = elapsed.Milliseconds()
+	log.Printf("GET /api/validation-rounds: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleRoundRewards handles GET /api/round-rewards.
+func (h *Service) HandleRoundRewards(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := model.WithRPCCounter(r.Context())
+
+	hasElection := r.URL.Query().Get("election_id") != ""
+	hasBlock := r.URL.Query().Get("block") != ""
+
+	if hasElection && hasBlock {
+		writeError(w, "election_id and block are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+	if !hasElection && !hasBlock {
+		writeError(w, "one of election_id or block is required", http.StatusBadRequest)
+		return
+	}
+
+	var q model.RoundRewardsQuery
+
+	if hasElection {
+		v, err := strconv.ParseInt(r.URL.Query().Get("election_id"), 10, 64)
+		if err != nil {
+			writeError(w, fmt.Sprintf("invalid election_id %q: %v", r.URL.Query().Get("election_id"), err), http.StatusBadRequest)
+			return
+		}
+		q.ElectionID = &v
+	}
+
+	if hasBlock {
+		v, err := strconv.ParseUint(r.URL.Query().Get("block"), 10, 32)
+		if err != nil {
+			writeError(w, fmt.Sprintf("invalid block %q: %v", r.URL.Query().Get("block"), err), http.StatusBadRequest)
+			return
+		}
+		u := uint32(v)
+		q.Block = &u
+	}
+
+	out, err := h.svc.FetchRoundRewards(ctx, q)
+	if err != nil {
+		log.Printf("FetchRoundRewards error: %v", err)
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	elapsed := time.Since(start)
+	out.ResponseTimeMs = elapsed.Milliseconds()
+	log.Printf("GET /api/round-rewards: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
