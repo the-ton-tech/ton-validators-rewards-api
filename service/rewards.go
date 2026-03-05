@@ -191,7 +191,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	sort.Slice(validatorRows, func(i, j int) bool { return validatorRows[i].trueStake.Cmp(validatorRows[j].trueStake) > 0 })
 
 	// 10. Collect pool data + nominator split (parallel).
-	entries := make([]model.ValidatorReward, len(validatorRows))
+	validatorRewards := make([]model.ValidatorReward, len(validatorRows))
 	g2 := new(errgroup.Group)
 
 	for i, row := range validatorRows {
@@ -202,7 +202,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 				new(big.Float).SetInt(totalTrueStake),
 			).Float64()
 		}
-		entries[i] = model.ValidatorReward{
+		validatorRewards[i] = model.ValidatorReward{
 			Rank:           i + 1,
 			Pubkey:         fmt.Sprintf("%x", row.v.PubKey()),
 			EffectiveStake: &model.BigInt{Int: *row.trueStake},
@@ -218,17 +218,17 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		g2.Go(func() error {
 			poolAddr := *row.poolAddr
 			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
-			entries[i].PoolType = poolType
+			validatorRewards[i].PoolType = poolType
 
 			if pd != nil {
 				if vAddr, ok := msgAddressToHuman(pd.ValidatorWalletAddress, true); ok {
-					entries[i].ValidatorAddress = vAddr
+					validatorRewards[i].ValidatorAddress = vAddr
 				} else if pd.ValidatorAddress != (tlb.Bits256{}) {
 					vAddr := ton.AccountID{Workchain: -1, Address: [32]byte(pd.ValidatorAddress)}
-					entries[i].ValidatorAddress = vAddr.ToHuman(true, false)
+					validatorRewards[i].ValidatorAddress = vAddr.ToHuman(true, false)
 				}
 				if ownerAddr, ok := msgAddressToHuman(pd.OwnerAddress, true); ok {
-					entries[i].OwnerAddress = ownerAddr
+					validatorRewards[i].OwnerAddress = ownerAddr
 				}
 			}
 
@@ -238,10 +238,10 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 
 			// Nominator Pool: use data from GetPoolData + ListNominators.
 			if pd.ValidatorAmount != nil {
-				entries[i].ValidatorStake = &model.BigInt{Int: *pd.ValidatorAmount}
+				validatorRewards[i].ValidatorStake = &model.BigInt{Int: *pd.ValidatorAmount}
 			}
 			if pd.NominatorsAmount != nil {
-				entries[i].NominatorsStake = &model.BigInt{Int: *pd.NominatorsAmount}
+				validatorRewards[i].NominatorsStake = &model.BigInt{Int: *pd.NominatorsAmount}
 			}
 			totalPoolStake := new(big.Int)
 			if pd.ValidatorAmount != nil {
@@ -250,9 +250,9 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			if pd.NominatorsAmount != nil {
 				totalPoolStake.Add(totalPoolStake, pd.NominatorsAmount)
 			}
-			entries[i].TotalStake = &model.BigInt{Int: *totalPoolStake}
-			entries[i].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
-			entries[i].NominatorsCount = pd.NominatorsCount
+			validatorRewards[i].TotalStake = &model.BigInt{Int: *totalPoolStake}
+			validatorRewards[i].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
+			validatorRewards[i].NominatorsCount = pd.NominatorsCount
 
 			if pd.Nominators == nil {
 				return nil
@@ -294,7 +294,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 						)
 					}
 				}
-				entries[i].Nominators = append(entries[i].Nominators, model.NominatorReward{
+				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
 					Weight:         nomWeight,
 					Reward:         &model.BigInt{Int: *nomReward},
@@ -315,7 +315,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		EndBlock:     endBlock,
 		TotalBonuses: &model.BigInt{Int: *bonuses},
 		TotalStake:   &model.BigInt{Int: *electionTotalStake},
-		Validators:   entries,
+		Validators:   validatorRewards,
 	}
 	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
 	nextID := int64(until)
