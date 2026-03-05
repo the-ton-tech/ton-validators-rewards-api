@@ -74,13 +74,15 @@ type ValidatorEntry struct {
 }
 
 type ValidationRound struct {
-	ElectionID int64     `json:"election_id"`
-	Start      time.Time `json:"start"`
-	End        time.Time `json:"end"`
-	StartBlock uint32    `json:"start_block"`
-	EndBlock   uint32    `json:"end_block,omitempty"`
-	Finished   bool      `json:"finished"`
-	Error      string    `json:"error,omitempty"`
+	ElectionID     int64     `json:"election_id"`
+	Start          time.Time `json:"start"`
+	End            time.Time `json:"end"`
+	StartBlock     uint32    `json:"start_block"`
+	EndBlock       uint32    `json:"end_block,omitempty"`
+	Finished       bool      `json:"finished"`
+	PrevElectionID *int64    `json:"prev_election_id,omitempty"`
+	NextElectionID *int64    `json:"next_election_id,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 
 type ValidationRoundsOutput struct {

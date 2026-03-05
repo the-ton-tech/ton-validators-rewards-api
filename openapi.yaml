@@ -39,14 +39,6 @@ paths:
         Returns past and current validation rounds with boundaries, stakes,
         and bonuses. Always uses the latest masterchain block.
       parameters:
-        - name: limit
-          in: query
-          description: Maximum number of rounds to return.
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            default: 10
         - name: election_id
           in: query
           description: >
@@ -387,6 +379,18 @@ components:
           format: uint32
           description: Masterchain block seqno at (or nearest to) round end. Omitted if round hasn't finished.
           example: 57546000
+        prev_election_id:
+          type: integer
+          format: int64
+          description: Election ID of the round immediately before this one.
+          example: 1772486024
+        next_election_id:
+          type: integer
+          format: int64
+          description: >
+            Election ID of the round immediately after this one.
+            Omitted when this round is not yet finished (next round not known).
+          example: 1772658824
         total_stake:
           allOf:
             - $ref: "#/components/schemas/NanoTON"

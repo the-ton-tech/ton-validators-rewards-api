@@ -16,13 +16,15 @@ import (
 
 // roundInfo holds intermediate data for a single validation round.
 type roundInfo struct {
-	electionID int64
-	startUtime uint32
-	endUtime   uint32
-	startBlock uint32
-	endBlock   uint32
-	finished   bool
-	fetchErr   string
+	electionID     int64
+	startUtime     uint32
+	endUtime       uint32
+	startBlock     uint32
+	endBlock       uint32
+	finished       bool
+	fetchErr       string
+	prevElectionID *int64
+	nextElectionID *int64
 }
 
 // roundFetchErr returns a short, user-friendly error message for a round fetch failure.
@@ -31,6 +33,24 @@ func roundFetchErr(err error) string {
 		return "state already gc'd"
 	}
 	return err.Error()
+}
+
+// fetchPrevElectionIDForBlock returns the election_id of the round containing (startBlock - 1).
+func fetchPrevElectionIDForBlock(ctx context.Context, client LiteClient, startBlock uint32) *int64 {
+	if startBlock <= 1 {
+		return nil
+	}
+	prevBlock := startBlock - 1
+	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, prevBlock)
+	if err != nil {
+		return nil
+	}
+	since, _, err := getConfigParam34(ctx, client, pinnedExt)
+	if err != nil || since == 0 {
+		return nil
+	}
+	p := int64(since)
+	return &p
 }
 
 // getConfigParam34 reads config param 34 pinned to the given block and returns since/until.
@@ -206,6 +226,7 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 		if err != nil {
 			walkErr = fmt.Sprintf("stopped after %d rounds: %v", n, err)
 			log.Printf("warning: %s", walkErr)
+			populatePrevNextElectionIDs(ctx, client, rounds)
 			return buildRoundsOutput(rounds, walkErr), nil
 		}
 
@@ -229,7 +250,20 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 		rounds = rounds[:limit]
 	}
 
+	populatePrevNextElectionIDs(ctx, client, rounds)
 	return buildRoundsOutput(rounds, walkErr), nil
+}
+
+func populatePrevNextElectionIDs(ctx context.Context, client LiteClient, rounds []roundInfo) {
+	for i := range rounds {
+		rounds[i].prevElectionID = fetchPrevElectionIDForBlock(ctx, client, rounds[i].startBlock)
+
+		// TODO Are we sure that end utime is always the next election id?
+		if rounds[i].finished && rounds[i].endUtime > 0 {
+			n := int64(rounds[i].endUtime)
+			rounds[i].nextElectionID = &n
+		}
+	}
 }
 
 // buildRoundsOutput constructs the final output from collected rounds.
@@ -240,11 +274,13 @@ func buildRoundsOutput(rounds []roundInfo, walkErr string) *model.ValidationRoun
 	}
 	for i, c := range rounds {
 		vr := model.ValidationRound{
-			ElectionID: c.electionID,
-			StartBlock: c.startBlock,
-			EndBlock:   c.endBlock,
-			Finished:   c.finished,
-			Error:      c.fetchErr,
+			ElectionID:     c.electionID,
+			StartBlock:     c.startBlock,
+			EndBlock:       c.endBlock,
+			Finished:       c.finished,
+			Error:          c.fetchErr,
+			PrevElectionID: c.prevElectionID,
+			NextElectionID: c.nextElectionID,
 		}
 		if c.startUtime != 0 {
 			vr.Start = time.Unix(int64(c.startUtime), 0).UTC()
