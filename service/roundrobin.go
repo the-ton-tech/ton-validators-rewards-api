@@ -28,6 +28,7 @@ type LiteClient interface {
 	GetAccountState(context.Context, ton.AccountID) (tlb.ShardAccount, error)
 	GetConfigParams(context.Context, liteapi.ConfigMode, []uint32) (tlb.ConfigParams, error)
 	RunSmcMethodByID(context.Context, ton.AccountID, int, tlb.VmStack) (uint32, tlb.VmStack, error)
+	RunSmcMethod(context.Context, ton.AccountID, string, tlb.VmStack) (uint32, tlb.VmStack, error)
 	WithBlock(ton.BlockIDExt) LiteClient
 }
 
@@ -230,6 +231,23 @@ func (r *RoundRobinClient) RunSmcMethodByID(ctx context.Context, accountID ton.A
 		))
 	defer span.End()
 	exitCode, stack, err := r.clientForRequest(ctx).RunSmcMethodByID(ctx, accountID, methodID, params)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetAttributes(attribute.Int("ton.method.exit_code", int(exitCode)))
+	}
+	return exitCode, stack, err
+}
+
+func (r *RoundRobinClient) RunSmcMethod(ctx context.Context, accountID ton.AccountID, method string, params tlb.VmStack) (uint32, tlb.VmStack, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.RunSmcMethod", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("ton.account", accountID.String()),
+			attribute.String("ton.method", method),
+		))
+	defer span.End()
+	exitCode, stack, err := r.clientForRequest(ctx).RunSmcMethod(ctx, accountID, method, params)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

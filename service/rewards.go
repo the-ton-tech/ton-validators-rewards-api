@@ -268,7 +268,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			tenThousand := big.NewInt(10000)
 			validatorReward := rows[i].reward
 
-			for _, n := range pd.Nominators.Nominators {
+			for _, n := range pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nAmount := new(big.Int).SetUint64(n.Amount)
 				var nomWeight float64

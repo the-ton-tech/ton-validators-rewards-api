@@ -10,10 +10,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/tonkeeper/tongo/abi"
+	"github.com/tonkeeper/tongo/boc"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
-	"github.com/tonkeeper/tongo/utils"
 
 	"github.com/tonkeeper/validators-statistics/model"
 )
@@ -26,6 +25,47 @@ type cachedPoolInfo struct {
 	ValidatorAddress       tlb.Bits256
 	OwnerAddress           tlb.MsgAddress
 	ValidatorWalletAddress tlb.MsgAddress
+}
+
+type getRolesResult struct {
+	OwnerAddress     tlb.MsgAddress
+	ValidatorAddress tlb.MsgAddress
+}
+
+type GetPoolDataConfigTlb struct {
+	ValidatorAddressBits256 tlb.Bits256
+	ValidatorRewardShare    uint16
+	MaxNominatorsCount      uint16
+	MinValidatorStake       tlb.Coins
+	MinNominatorStake       tlb.Coins
+	// ds~load_uint(ADDR_SIZE()), ;; validator_address
+	// ds~load_uint(16), ;; validator_reward_share
+	// ds~load_uint(16), ;; max_nominators_count
+	// ds~load_coins(), ;; min_validator_stake
+	// ds~load_coins() ;; min_nominator_stake
+}
+
+type PackedNominatorData struct {
+	Amount               tlb.Coins
+	PendingDepositAmount tlb.Coins
+}
+
+type GetPoolDataTlb struct {
+	State           int8      // ds~load_uint(8), ;; state
+	NominatorsCount uint16    // ds~load_uint(16), ;; nominators_count
+	StakeAmountSent tlb.Coins // ds~load_coins(), ;; stake_amount_sent
+	ValidatorAmount tlb.Coins // ds~load_coins(), ;; validator_amount
+
+	Config GetPoolDataConfigTlb `tlb:"^"` // unpack_config(ds~load_ref().begin_parse()), ;; config
+
+	Nominators               tlb.Maybe[tlb.Ref[tlb.Hashmap[tlb.Bits256, PackedNominatorData]]] // ds~load_dict(), ;; nominators
+	WithdrawRequests         tlb.Maybe[tlb.Ref[tlb.Hashmap[tlb.Bits256, any]]]                 // ds~load_dict(), ;; withdraw_requests
+	StakeAt                  uint32                                                            // ds~load_uint(32), ;; stake_at
+	SavedValidatorSetHash    tlb.Bits256                                                       // ds~load_uint(256), ;; saved_validator_set_hash
+	ValidatorSetChangesCount uint8                                                             // ds~load_uint(8), ;; validator_set_changes_count
+	ValidatorSetChangeTime   uint32                                                            // ds~load_uint(32), ;; validator_set_change_time
+	StakeHeldFor             uint32                                                            // ds~load_uint(32), ;; stake_held_for
+	ConfigProposalVotings    tlb.Maybe[tlb.Ref[tlb.Hashmap[tlb.Bits256, any]]]                 // ds~load_dict() ;; config_proposal_votings
 }
 
 var poolTypeCache sync.Map // ton.AccountID → cachedPoolInfo
@@ -82,7 +122,14 @@ type poolData struct {
 	ValidatorAddress       tlb.Bits256
 	OwnerAddress           tlb.MsgAddress
 	ValidatorWalletAddress tlb.MsgAddress
-	Nominators             *abi.ListNominatorsResult
+	Nominators             []nominatorData
+}
+
+type nominatorData struct {
+	Address              tlb.Bits256
+	Amount               uint64
+	PendingDepositAmount uint64
+	WithdrawRequested    bool
 }
 
 // fetchPoolData determines the pool type by contract code hash and, for known
@@ -124,10 +171,16 @@ func fetchPoolData(ctx context.Context, client LiteClient, poolAddr ton.AccountI
 		return "", nil
 	}
 	code := state.AccountActive.StateInit.Code
+	data := state.AccountActive.StateInit.Data
 	if !code.Exists {
 		poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: poolTypeOther})
 		return poolTypeOther, nil
 	}
+	if !data.Exists {
+		poolTypeCache.Store(poolAddr, cachedPoolInfo{Type: poolTypeOther})
+		return poolTypeOther, nil
+	}
+
 	codeHash, err := code.Value.Value.Hash256()
 	if err != nil {
 		return "", nil
@@ -136,45 +189,65 @@ func fetchPoolData(ctx context.Context, client LiteClient, poolAddr ton.AccountI
 	poolType := poolTypeByCodeHash(codeHash)
 	switch poolType {
 	case poolTypeNominatorV10:
-		// Fetch ListNominators + GetPoolData for full nominator data.
-		model.CountRPC(ctx)
-		_, lnResult, lnErr := abi.ListNominators(ctx, client, poolAddr)
-		if lnErr != nil {
+		pd := &poolData{
+			// Nominators: &noms,
+			NominatorsAmount: new(big.Int),
+		}
+
+		tf, raw_err := getNominatorPoolPoolData(ctx, data.Value.Value)
+
+		if raw_err != nil {
+			log.Printf("error getting nominator pool data: %v", raw_err)
 			return poolType, nil
 		}
-		noms, ok := lnResult.(abi.ListNominatorsResult)
-		if !ok {
-			return poolType, nil
+		pd.ValidatorAmount = new(big.Int).SetUint64(uint64(tf.ValidatorAmount))
+		pd.RewardShare = uint32(tf.Config.ValidatorRewardShare)
+		pd.NominatorsCount = uint32(tf.NominatorsCount)
+		pd.ValidatorAddress = tf.Config.ValidatorAddressBits256
+
+		noms := make([]nominatorData, tf.NominatorsCount)
+		for _, n := range tf.Nominators.Value.Value.Items() {
+			_, withdraw_requested := tf.WithdrawRequests.Value.Value.Get(n.Key)
+			noms = append(noms, nominatorData{
+				Address:              n.Key,
+				Amount:               uint64(n.Value.Amount),
+				PendingDepositAmount: uint64(n.Value.PendingDepositAmount),
+				WithdrawRequested:    withdraw_requested,
+			})
 		}
-		pd := &poolData{Nominators: &noms, NominatorsAmount: new(big.Int)}
-		for _, n := range noms.Nominators {
+
+		for _, n := range noms {
 			pd.NominatorsAmount.Add(pd.NominatorsAmount, new(big.Int).SetUint64(n.Amount))
 		}
-		model.CountRPC(ctx)
-		_, gpResult, gpErr := abi.GetPoolData(ctx, client, poolAddr)
-		if gpErr == nil {
-			if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-				pd.ValidatorAmount = new(big.Int).SetInt64(tf.ValidatorAmount)
-				pd.RewardShare = tf.ValidatorRewardShare
-				pd.NominatorsCount = tf.NominatorsCount
-				pd.ValidatorAddress = tf.ValidatorAddress
-			}
-		}
+		pd.Nominators = noms
 		return poolType, pd
 
-	case poolTypeSingleNominatorV10, poolTypeSingleNominatorV11:
+	case poolTypeSingleNominatorV10:
 		// Fetch GetPoolData + fetchPoolRoles for validator/owner addresses.
 		pd := &poolData{}
-		model.CountRPC(ctx)
-		_, gpResult, gpErr := abi.GetPoolData(ctx, client, poolAddr)
-		if gpErr == nil {
-			if tf, ok := gpResult.(abi.GetPoolData_TfResult); ok {
-				pd.ValidatorAddress = tf.ValidatorAddress
-			}
-		}
-		if roles, ok := fetchPoolRoles(ctx, client, poolAddr); ok {
+		if roles, err := getSingleNominatorV1011Roles(ctx, data.Value.Value); err == nil {
 			pd.OwnerAddress = roles.OwnerAddress
 			pd.ValidatorWalletAddress = roles.ValidatorAddress
+		} else {
+			log.Printf("error getting single nominator v10 roles: %v", err)
+			return poolType, nil
+		}
+		poolTypeCache.Store(poolAddr, cachedPoolInfo{
+			Type:                   poolType,
+			ValidatorAddress:       pd.ValidatorAddress,
+			OwnerAddress:           pd.OwnerAddress,
+			ValidatorWalletAddress: pd.ValidatorWalletAddress,
+		})
+		return poolType, pd
+	case poolTypeSingleNominatorV11:
+		// Fetch GetPoolData + fetchPoolRoles for validator/owner addresses.
+		pd := &poolData{}
+		if roles, err := getSingleNominatorV1011Roles(ctx, data.Value.Value); err == nil {
+			pd.OwnerAddress = roles.OwnerAddress
+			pd.ValidatorWalletAddress = roles.ValidatorAddress
+		} else {
+			log.Printf("error getting single nominator v11 roles: %v", err)
+			return poolType, nil
 		}
 		poolTypeCache.Store(poolAddr, cachedPoolInfo{
 			Type:                   poolType,
@@ -191,32 +264,34 @@ func fetchPoolData(ctx context.Context, client LiteClient, poolAddr ton.AccountI
 	}
 }
 
-type getRolesResult struct {
+func getNominatorPoolPoolData(_ context.Context, data boc.Cell) (*GetPoolDataTlb, error) {
+	var tf GetPoolDataTlb
+	decoder := tlb.NewDecoder()
+	decoder = decoder.WithDebug()
+	if err := decoder.Unmarshal(&data, &tf); err != nil {
+		return nil, err
+	}
+
+	return &tf, nil
+}
+
+type singleNominatorV1011Data struct {
 	OwnerAddress     tlb.MsgAddress
 	ValidatorAddress tlb.MsgAddress
 }
 
-// fetchPoolRoles reads owner and validator wallet addresses from get_roles.
-func fetchPoolRoles(ctx context.Context, executor abi.Executor, poolAddr ton.AccountID) (getRolesResult, bool) {
-	model.CountRPC(ctx)
-	errCode, stack, err := executor.RunSmcMethodByID(ctx, poolAddr, utils.MethodIdFromName("get_roles"), tlb.VmStack{})
-	if err != nil || (errCode != 0 && errCode != 1) {
-		return getRolesResult{}, false
+func getSingleNominatorV1011Roles(_ context.Context, data boc.Cell) (getRolesResult, error) {
+	// slice := data.read
+	// owner_adress = data.
+	var nominator_data singleNominatorV1011Data
+	if err := tlb.Unmarshal(&data, &nominator_data); err != nil {
+		return getRolesResult{}, err
 	}
+	return getRolesResult{
+		OwnerAddress:     nominator_data.OwnerAddress,
+		ValidatorAddress: nominator_data.ValidatorAddress,
+	}, nil
 
-	if len(stack) != 2 {
-		return getRolesResult{}, false
-	}
-	if (stack[0].SumType != "VmStkSlice" && stack[0].SumType != "VmStkNull") ||
-		(stack[1].SumType != "VmStkSlice" && stack[1].SumType != "VmStkNull") {
-		return getRolesResult{}, false
-	}
-
-	var result getRolesResult
-	if err := stack.Unmarshal(&result); err != nil {
-		return getRolesResult{}, false
-	}
-	return result, true
 }
 
 // extractBigInt extracts a *big.Int from a VmStackValue (VmStkTinyInt or VmStkInt).
@@ -252,7 +327,7 @@ type poolEntry struct {
 func fetchRawPastElections(ctx context.Context, client LiteClient, electorAddr ton.AccountID) ([]RawPastElection, error) {
 	stack, err := retry(func() (tlb.VmStack, error) {
 		model.CountRPC(ctx)
-		_, stack, err := client.RunSmcMethodByID(ctx, electorAddr, utils.MethodIdFromName("past_elections"), tlb.VmStack{})
+		_, stack, err := client.RunSmcMethod(ctx, electorAddr, "past_elections", tlb.VmStack{})
 		return stack, err
 	})
 	if err != nil {

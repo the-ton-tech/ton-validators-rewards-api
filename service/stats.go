@@ -326,7 +326,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			rewardShare := big.NewInt(int64(pd.RewardShare))
 			tenThousand := big.NewInt(10000)
 
-			for _, n := range pd.Nominators.Nominators {
+			for _, n := range pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nAmount := new(big.Int).SetUint64(n.Amount)
 				var nomWeight float64
