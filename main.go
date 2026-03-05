@@ -2,19 +2,33 @@ package main
 
 import (
 	_ "embed"
+	"context"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/tonkeeper/validators-statistics/api"
 	"github.com/tonkeeper/validators-statistics/service"
+	"github.com/uptrace/uptrace-go/uptrace"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 //go:embed openapi.yaml
 var openapiSpec []byte
 
 func main() {
+	_ = godotenv.Load()
+
+	if dsn := os.Getenv("UPTRACE_DSN"); dsn != "" {
+		uptrace.ConfigureOpentelemetry(
+			uptrace.WithDSN(dsn),
+			uptrace.WithServiceName("ton-validators-rewards-api"),
+		)
+		defer uptrace.Shutdown(context.Background())
+	}
+
 	configPath := flag.String("config", "", "path to TON global config JSON (default: download from ton.org)")
 	flag.Parse()
 
@@ -51,6 +65,7 @@ func main() {
 		port = "8080"
 	}
 
+	handler := otelhttp.NewHandler(mux, "ton-validators-rewards-api")
 	log.Printf("listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }

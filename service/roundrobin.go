@@ -11,7 +11,13 @@ import (
 	"github.com/tonkeeper/tongo/liteclient"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+const tracerName = "github.com/tonkeeper/validators-statistics/service/liteclient"
 
 // LiteClient is the interface for blockchain operations. Implemented by
 // RoundRobinClient and used by all service methods.
@@ -146,25 +152,100 @@ func (r *RoundRobinClient) WithBlock(block ton.BlockIDExt) LiteClient {
 }
 
 func (r *RoundRobinClient) GetMasterchainInfo(ctx context.Context) (liteclient.LiteServerMasterchainInfoC, error) {
-	return r.clientForRequest(ctx).GetMasterchainInfo(ctx)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetMasterchainInfo", trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+	res, err := r.clientForRequest(ctx).GetMasterchainInfo(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return res, err
 }
 
 func (r *RoundRobinClient) LookupBlock(ctx context.Context, blockID ton.BlockID, mode uint32, lt *uint64, utime *uint32) (ton.BlockIDExt, tlb.BlockInfo, error) {
-	return r.clientForRequest(ctx).LookupBlock(ctx, blockID, mode, lt, utime)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.LookupBlock", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.Int64("ton.block.workchain", int64(blockID.Workchain)),
+			attribute.Int64("ton.block.shard", int64(blockID.Shard)),
+			attribute.Int64("ton.block.seqno", int64(blockID.Seqno)),
+			attribute.Int64("ton.lookup.mode", int64(mode)),
+		))
+	defer span.End()
+	ext, info, err := r.clientForRequest(ctx).LookupBlock(ctx, blockID, mode, lt, utime)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return ext, info, err
 }
 
 func (r *RoundRobinClient) GetBlock(ctx context.Context, blockID ton.BlockIDExt) (tlb.Block, error) {
-	return r.clientForRequest(ctx).GetBlock(ctx, blockID)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetBlock", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.Int64("ton.block.workchain", int64(blockID.Workchain)),
+			attribute.Int64("ton.block.shard", int64(blockID.Shard)),
+			attribute.Int64("ton.block.seqno", int64(blockID.Seqno)),
+		))
+	defer span.End()
+	block, err := r.clientForRequest(ctx).GetBlock(ctx, blockID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return block, err
 }
 
 func (r *RoundRobinClient) GetAccountState(ctx context.Context, accountID ton.AccountID) (tlb.ShardAccount, error) {
-	return r.clientForRequest(ctx).GetAccountState(ctx, accountID)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetAccountState", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("ton.account", accountID.String())))
+	defer span.End()
+	state, err := r.clientForRequest(ctx).GetAccountState(ctx, accountID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return state, err
 }
 
 func (r *RoundRobinClient) GetConfigParams(ctx context.Context, mode liteapi.ConfigMode, paramList []uint32) (tlb.ConfigParams, error) {
-	return r.clientForRequest(ctx).GetConfigParams(ctx, mode, paramList)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetConfigParams", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.Int("ton.config.mode", int(mode)),
+			attribute.IntSlice("ton.config.params", intSlice(paramList)),
+		))
+	defer span.End()
+	params, err := r.clientForRequest(ctx).GetConfigParams(ctx, mode, paramList)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return params, err
 }
 
 func (r *RoundRobinClient) RunSmcMethodByID(ctx context.Context, accountID ton.AccountID, methodID int, params tlb.VmStack) (uint32, tlb.VmStack, error) {
-	return r.clientForRequest(ctx).RunSmcMethodByID(ctx, accountID, methodID, params)
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.RunSmcMethodByID", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("ton.account", accountID.String()),
+			attribute.Int("ton.method.id", methodID),
+		))
+	defer span.End()
+	exitCode, stack, err := r.clientForRequest(ctx).RunSmcMethodByID(ctx, accountID, methodID, params)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetAttributes(attribute.Int("ton.method.exit_code", int(exitCode)))
+	}
+	return exitCode, stack, err
+}
+
+func intSlice(u []uint32) []int {
+	if u == nil {
+		return nil
+	}
+	s := make([]int, len(u))
+	for i, v := range u {
+		s[i] = int(v)
+	}
+	return s
 }

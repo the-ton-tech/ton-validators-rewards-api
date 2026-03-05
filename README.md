@@ -15,6 +15,13 @@ The server listens on port `8080` by default. Override with the `PORT` environme
 PORT=3000 ./ton-validators-rewards-api
 ```
 
+Environment variables are loaded from a `.env` file in the working directory (if present). Supported variables:
+
+| Variable      | Description |
+|---------------|-------------|
+| `PORT`        | HTTP server port (default: `8080`) |
+| `UPTRACE_DSN` | [Uptrace](https://uptrace.dev) DSN for tracing. If not set, no telemetry is sent. |
+
 ### Docker
 
 ```bash
