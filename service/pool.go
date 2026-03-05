@@ -205,7 +205,7 @@ func fetchPoolData(ctx context.Context, client LiteClient, poolAddr ton.AccountI
 		pd.NominatorsCount = uint32(tf.NominatorsCount)
 		pd.ValidatorAddress = tf.Config.ValidatorAddressBits256
 
-		noms := make([]nominatorData, tf.NominatorsCount)
+		noms := make([]nominatorData, 0, tf.NominatorsCount)
 		for _, n := range tf.Nominators.Value.Value.Items() {
 			_, withdraw_requested := tf.WithdrawRequests.Value.Value.Get(n.Key)
 			noms = append(noms, nominatorData{
