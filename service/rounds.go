@@ -66,19 +66,13 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 	var anchorExt ton.BlockIDExt
 	switch {
 	case query.Block != nil:
-		ext, _, err := lookupMasterchainBlock(ctx, client, *query.Block)
-		if err != nil {
-			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *query.Block, err)
-		}
-		anchorExt = ext
-
+		fallthrough
 	case query.ElectionID != nil:
-		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*query.ElectionID))
-		if err != nil {
-			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *query.ElectionID, err)
+		anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
+		if err != nil || anchor == nil {
+			return nil, fmt.Errorf("getAnchorExt error or nil: %w", err)
 		}
-		anchorExt = ext
-
+		anchorExt = *anchor
 	default:
 		ext, err := retry(func() (ton.BlockIDExt, error) {
 			model.CountRPC(ctx)

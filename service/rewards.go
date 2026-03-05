@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
@@ -15,28 +16,36 @@ import (
 	"github.com/tonkeeper/validators-statistics/model"
 )
 
+func getAnchorExt(ctx context.Context, client *liteapi.Client, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
+	var anchorExt ton.BlockIDExt
+	switch {
+	case block_seqno != nil:
+		ext, _, err := lookupMasterchainBlock(ctx, client, *block_seqno)
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *block_seqno, err)
+		}
+		anchorExt = ext
+
+	case election_id != nil:
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
+		}
+		anchorExt = ext
+	}
+	return &anchorExt, nil
+}
+
 // FetchRoundRewards computes per-validator and per-nominator reward distribution
 // for a finished validation round using the elector's bonuses value.
 func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery) (*model.RoundRewardsOutput, error) {
 	client := s.currentClient()
 
-	// 1. Resolve anchor block.
-	var anchorExt ton.BlockIDExt
-	switch {
-	case query.Block != nil:
-		ext, _, err := lookupMasterchainBlock(ctx, client, *query.Block)
-		if err != nil {
-			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *query.Block, err)
-		}
-		anchorExt = ext
-
-	case query.ElectionID != nil:
-		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*query.ElectionID))
-		if err != nil {
-			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *query.ElectionID, err)
-		}
-		anchorExt = ext
+	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
+	if err != nil || anchor == nil {
+		return nil, fmt.Errorf("getAnchorExt error or nil: %w", err)
 	}
+	anchorExt := *anchor
 
 	// 2. Resolve round boundaries from config param 34.
 	since, until, err := getConfigParam34(ctx, client, anchorExt)
@@ -71,8 +80,8 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	pinned := client.WithBlock(pinnedExt)
 
 	var (
-		conf     *ton.BlockchainConfig
-		pools    map[tlb.Bits256]poolEntry
+		conf      *ton.BlockchainConfig
+		pools     map[tlb.Bits256]poolEntry
 		elections []RawPastElection
 	)
 
@@ -308,4 +317,3 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	}
 	return out, nil
 }
-
