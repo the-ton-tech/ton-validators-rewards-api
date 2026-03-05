@@ -339,6 +339,18 @@ components:
           format: int64
           description: Current election ID (electAt timestamp).
           example: 1740053384
+        prev_election_id:
+          type: integer
+          format: int64
+          description: Election ID of the round immediately before this one.
+          example: 1772486024
+        next_election_id:
+          type: integer
+          format: int64
+          description: >
+            Election ID of the round immediately after this one.
+            Omitted when the current round is not yet finished (next round not known).
+          example: 1772658824
         elector_balance:
           $ref: "#/components/schemas/NanoTON"
         total_stake:
@@ -517,6 +529,16 @@ components:
           format: int64
           description: Election ID (electAt timestamp).
           example: 1740053384
+        prev_election_id:
+          type: integer
+          format: int64
+          description: Election ID of the round immediately before this one.
+          example: 1772486024
+        next_election_id:
+          type: integer
+          format: int64
+          description: Election ID of the round immediately after this one.
+          example: 1772658824
         round_start:
           type: string
           format: date-time

@@ -306,14 +306,17 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	_ = g2.Wait()
 
 	out := &model.RoundRewardsOutput{
-		ElectionID:   electionID,
-		RoundStart:   time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
-		RoundEnd:     time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
-		StartBlock:   startExt.Seqno,
-		EndBlock:     endBlock,
-		TotalBonuses: &model.BigInt{Int: *bonuses},
-		TotalStake:   &model.BigInt{Int: *electionTotalStake},
-		Validators:   entries,
+		ElectionID:     electionID,
+		RoundStart:     time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
+		RoundEnd:       time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
+		StartBlock:     startExt.Seqno,
+		EndBlock:       endBlock,
+		TotalBonuses:   &model.BigInt{Int: *bonuses},
+		TotalStake:     &model.BigInt{Int: *electionTotalStake},
+		Validators:     entries,
 	}
+	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
+	nextID := int64(until)
+	out.NextElectionID = &nextID
 	return out, nil
 }

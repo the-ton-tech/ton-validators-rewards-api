@@ -187,6 +187,13 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		ElectorBalance: &model.BigInt{Int: *electorBalance},
 		RewardPerBlock: &model.BigInt{Int: *rewardPerBlock},
 	}
+	if roundStartBlock > 0 {
+		out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
+	}
+	if roundUntil > 0 && time.Unix(int64(roundUntil), 0).Before(time.Now()) {
+		nextID := int64(roundUntil)
+		out.NextElectionID = &nextID
+	}
 	out.ValidationRound = model.RoundInfo{
 		Start:      time.Unix(int64(roundSince), 0).UTC().Format(time.RFC3339),
 		End:        time.Unix(int64(roundUntil), 0).UTC().Format(time.RFC3339),

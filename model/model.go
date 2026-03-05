@@ -37,6 +37,8 @@ type Output struct {
 	Block           BlockInfo        `json:"block"`
 	ValidationRound RoundInfo        `json:"validation_round"`
 	ElectionID      int64            `json:"election_id"`
+	PrevElectionID  *int64           `json:"prev_election_id,omitempty"`
+	NextElectionID  *int64           `json:"next_election_id,omitempty"`
 	ElectorBalance  *BigInt          `json:"elector_balance"`
 	TotalStake      *BigInt          `json:"total_stake"`
 	RewardPerBlock  *BigInt          `json:"reward_per_block"`
@@ -105,16 +107,18 @@ type RoundRewardsQuery struct {
 
 // RoundRewardsOutput is the response for the round-rewards endpoint.
 type RoundRewardsOutput struct {
-	ResponseTimeMs int64             `json:"response_time_ms"`
-	ElectionID     int64             `json:"election_id"`
-	RoundStart     string            `json:"round_start"`
-	RoundEnd       string            `json:"round_end"`
-	StartBlock     uint32            `json:"start_block"`
-	EndBlock       uint32            `json:"end_block"`
-	TotalBonuses   *BigInt           `json:"total_bonuses"`
-	TotalStake     *BigInt           `json:"total_stake"`
-	Validators     []ValidatorReward `json:"validators"`
-	Error          string            `json:"error,omitempty"`
+	ResponseTimeMs  int64             `json:"response_time_ms"`
+	ElectionID      int64             `json:"election_id"`
+	PrevElectionID  *int64            `json:"prev_election_id,omitempty"`
+	NextElectionID  *int64            `json:"next_election_id,omitempty"`
+	RoundStart      string            `json:"round_start"`
+	RoundEnd        string            `json:"round_end"`
+	StartBlock      uint32            `json:"start_block"`
+	EndBlock        uint32            `json:"end_block"`
+	TotalBonuses    *BigInt           `json:"total_bonuses"`
+	TotalStake      *BigInt           `json:"total_stake"`
+	Validators      []ValidatorReward `json:"validators"`
+	Error           string            `json:"error,omitempty"`
 }
 
 // ValidatorReward holds per-validator reward data for a finished round.
