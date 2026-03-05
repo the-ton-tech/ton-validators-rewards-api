@@ -1,0 +1,151 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync/atomic"
+
+	"github.com/tonkeeper/tongo/config"
+	"github.com/tonkeeper/tongo/liteapi"
+	"github.com/tonkeeper/tongo/liteclient"
+	"github.com/tonkeeper/tongo/tlb"
+	"github.com/tonkeeper/tongo/ton"
+)
+
+// LiteClient is the interface for blockchain operations. Implemented by
+// RoundRobinClient and used by all service methods.
+type LiteClient interface {
+	GetMasterchainInfo(context.Context) (liteclient.LiteServerMasterchainInfoC, error)
+	LookupBlock(context.Context, ton.BlockID, uint32, *uint64, *uint32) (ton.BlockIDExt, tlb.BlockInfo, error)
+	GetBlock(context.Context, ton.BlockIDExt) (tlb.Block, error)
+	GetAccountState(context.Context, ton.AccountID) (tlb.ShardAccount, error)
+	GetConfigParams(context.Context, liteapi.ConfigMode, []uint32) (tlb.ConfigParams, error)
+	RunSmcMethodByID(context.Context, ton.AccountID, int, tlb.VmStack) (uint32, tlb.VmStack, error)
+	WithBlock(ton.BlockIDExt) LiteClient
+}
+
+// clientEntry holds a liteapi client and its metadata for debug logging.
+type clientEntry struct {
+	client *liteapi.Client
+	host   string
+}
+
+// RoundRobinClient wraps multiple liteapi clients (one per liteserver) and
+// distributes requests across them via round-robin. Unlike the default
+// liteapi pool which routes all traffic through a single "best" connection,
+// this ensures all available connections are utilized.
+type RoundRobinClient struct {
+	entries     []clientEntry
+	counter     uint64
+	targetBlock *ton.BlockIDExt
+}
+
+// NewRoundRobinClient creates a client that uses one liteapi connection per
+// liteserver and round-robins requests across them.
+func NewRoundRobinClient(configPath string) (*RoundRobinClient, error) {
+	conf, err := getCachedConfig(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]clientEntry, 0, len(conf.LiteServers))
+	for _, server := range conf.LiteServers {
+		cli, err := liteapi.NewClient(
+			liteapi.WithLiteServers([]config.LiteServer{server}),
+			liteapi.WithMaxConnectionsNumber(1),
+			liteapi.WithAsyncConnectionsInit(),
+			liteapi.WithWorkersPerConnection(1),
+		)
+		if err != nil {
+			// Log but continue - we want as many connections as possible
+			log.Printf("warning: failed to connect to liteserver %s: %v", server.Host, err)
+			continue
+		}
+		entries = append(entries, clientEntry{client: cli, host: server.Host})
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no liteservers available")
+	}
+
+	log.Printf("round-robin client: %d liteserver connections", len(entries))
+	return &RoundRobinClient{entries: entries}, nil
+}
+
+// hasConnections returns true if the client has at least one working connection.
+func hasConnections(c *liteapi.Client) bool {
+	status := c.GetPoolStatus()
+	for _, conn := range status.Connections {
+		if conn.Connected {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RoundRobinClient) nextClient() (clientEntry, int) {
+	entries := r.entries
+	n := len(entries)
+	if n == 0 {
+		return clientEntry{}, -1
+	}
+	// Build list of healthy client indices (avoid reusing same server repeatedly).
+	healthy := make([]int, 0, n)
+	for i, e := range entries {
+		if hasConnections(e.client) {
+			healthy = append(healthy, i)
+		}
+	}
+	if len(healthy) == 0 {
+		idx := int(atomic.AddUint64(&r.counter, 1)) % n
+		return entries[idx], idx
+	}
+	// Round-robin among healthy clients only.
+	pos := int(atomic.AddUint64(&r.counter, 1)) % len(healthy)
+	idx := healthy[pos]
+	return entries[idx], idx
+}
+
+func (r *RoundRobinClient) clientForRequest() *liteapi.Client {
+	e, id := r.nextClient()
+	log.Printf("lite request client_id=%d server=%s", id, e.host)
+	c := e.client
+	if r.targetBlock != nil {
+		return c.WithBlock(*r.targetBlock)
+	}
+	return c
+}
+
+// WithBlock returns a client pinned to the given block for block-specific queries.
+func (r *RoundRobinClient) WithBlock(block ton.BlockIDExt) LiteClient {
+	return &RoundRobinClient{
+		entries:     r.entries,
+		counter:     r.counter,
+		targetBlock: &block,
+	}
+}
+
+func (r *RoundRobinClient) GetMasterchainInfo(ctx context.Context) (liteclient.LiteServerMasterchainInfoC, error) {
+	return r.clientForRequest().GetMasterchainInfo(ctx)
+}
+
+func (r *RoundRobinClient) LookupBlock(ctx context.Context, blockID ton.BlockID, mode uint32, lt *uint64, utime *uint32) (ton.BlockIDExt, tlb.BlockInfo, error) {
+	return r.clientForRequest().LookupBlock(ctx, blockID, mode, lt, utime)
+}
+
+func (r *RoundRobinClient) GetBlock(ctx context.Context, blockID ton.BlockIDExt) (tlb.Block, error) {
+	return r.clientForRequest().GetBlock(ctx, blockID)
+}
+
+func (r *RoundRobinClient) GetAccountState(ctx context.Context, accountID ton.AccountID) (tlb.ShardAccount, error) {
+	return r.clientForRequest().GetAccountState(ctx, accountID)
+}
+
+func (r *RoundRobinClient) GetConfigParams(ctx context.Context, mode liteapi.ConfigMode, paramList []uint32) (tlb.ConfigParams, error) {
+	return r.clientForRequest().GetConfigParams(ctx, mode, paramList)
+}
+
+func (r *RoundRobinClient) RunSmcMethodByID(ctx context.Context, accountID ton.AccountID, methodID int, params tlb.VmStack) (uint32, tlb.VmStack, error) {
+	return r.clientForRequest().RunSmcMethodByID(ctx, accountID, methodID, params)
+}

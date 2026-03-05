@@ -4,20 +4,18 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"github.com/tonkeeper/tongo/liteapi"
 )
 
 // Service holds the blockchain client and provides validator statistics methods.
 type Service struct {
 	mu           sync.RWMutex
-	client       *liteapi.Client
+	client       LiteClient
 	clientInitAt time.Time
 	configPath   string
 }
 
-// New creates a new Service with the given liteapi client.
-func New(client *liteapi.Client, configPath string) *Service {
+// New creates a new Service with the given blockchain client.
+func New(client LiteClient, configPath string) *Service {
 	return &Service{
 		client:       client,
 		clientInitAt: time.Now(),
@@ -25,7 +23,7 @@ func New(client *liteapi.Client, configPath string) *Service {
 	}
 }
 
-func (s *Service) currentClient() *liteapi.Client {
+func (s *Service) currentClient() LiteClient {
 	s.mu.RLock()
 	client := s.client
 	needsRefresh := time.Since(s.clientInitAt) >= cacheTTL

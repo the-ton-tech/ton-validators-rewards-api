@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
@@ -16,18 +15,28 @@ import (
 	"github.com/tonkeeper/validators-statistics/model"
 )
 
-func getAnchorExt(ctx context.Context, client *liteapi.Client, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
+type lookUpResult struct {
+	ext  ton.BlockIDExt
+	time time.Time
+}
+
+func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
 	var anchorExt ton.BlockIDExt
 	switch {
 	case block_seqno != nil:
-		ext, _, err := lookupMasterchainBlock(ctx, client, *block_seqno)
+		res, err := retry(func() (lookUpResult, error) {
+			ext, time, err := lookupMasterchainBlock(ctx, client, *block_seqno)
+			return lookUpResult{ext: ext, time: time}, err
+		})
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *block_seqno, err)
 		}
-		anchorExt = ext
+		anchorExt = res.ext
 
 	case election_id != nil:
-		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
+		ext, err := retry(func() (ton.BlockIDExt, error) {
+			return lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
 		}

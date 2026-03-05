@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 
@@ -42,7 +41,7 @@ type RawPastElection struct {
 }
 
 // lookupMasterchainBlock resolves a seqno to a BlockIDExt and returns the block time.
-func lookupMasterchainBlock(ctx context.Context, client *liteapi.Client, seqno uint32) (ton.BlockIDExt, time.Time, error) {
+func lookupMasterchainBlock(ctx context.Context, client LiteClient, seqno uint32) (ton.BlockIDExt, time.Time, error) {
 	blockID := ton.BlockID{
 		Workchain: -1,
 		Shard:     0x8000000000000000,
@@ -83,7 +82,7 @@ func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
 }
 
 // lookupMasterchainBlockByUtime resolves a unix timestamp to the nearest masterchain block.
-func lookupMasterchainBlockByUtime(ctx context.Context, client *liteapi.Client, utime uint32) (ton.BlockIDExt, error) {
+func lookupMasterchainBlockByUtime(ctx context.Context, client LiteClient, utime uint32) (ton.BlockIDExt, error) {
 	blockID := ton.BlockID{
 		Workchain: -1,
 		Shard:     0x8000000000000000,

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tonkeeper/tongo/config"
-	"github.com/tonkeeper/tongo/liteapi"
 )
 
 const (
@@ -21,26 +20,17 @@ const (
 
 var globalConfigCache struct {
 	sync.Mutex
-	conf      *config.GlobalConfigurationFile
-	fetchedAt time.Time
+	conf       *config.GlobalConfigurationFile
+	fetchedAt  time.Time
 	configPath string
 }
 
-// NewClient creates a liteapi client from a config file path or the default remote URL.
-func NewClient(configPath string) (*liteapi.Client, error) {
-	conf, err := getCachedConfig(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	maxConns := len(conf.LiteServers)
-	log.Printf("connecting to %d liteservers", maxConns)
-
-	return liteapi.NewClient(
-		liteapi.WithConfigurationFile(*conf),
-		liteapi.WithMaxConnectionsNumber(maxConns),
-		liteapi.WithAsyncConnectionsInit(),
-	)
+// NewClient creates a round-robin client over liteapi that distributes requests
+// across all available liteserver connections. Unlike the default liteapi
+// pool which routes all traffic through a single "best" connection, this
+// ensures all connections are utilized.
+func NewClient(configPath string) (*RoundRobinClient, error) {
+	return NewRoundRobinClient(configPath)
 }
 
 func getCachedConfig(configPath string) (*config.GlobalConfigurationFile, error) {

@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
 
@@ -35,7 +34,7 @@ func roundFetchErr(err error) string {
 }
 
 // getConfigParam34 reads config param 34 pinned to the given block and returns since/until.
-func getConfigParam34(ctx context.Context, client *liteapi.Client, ext ton.BlockIDExt) (since, until uint32, err error) {
+func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt) (since, until uint32, err error) {
 	pinned := client.WithBlock(ext)
 	conf, err := retry(func() (*ton.BlockchainConfig, error) {
 		model.CountRPC(ctx)

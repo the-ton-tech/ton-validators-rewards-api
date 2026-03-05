@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/tonkeeper/tongo/abi"
-	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 	"github.com/tonkeeper/tongo/utils"
@@ -95,7 +94,7 @@ type poolData struct {
 //
 // All types except nominator pools are cached (they have no per-request data).
 // Network errors skip detection entirely and return ("", nil) without caching.
-func fetchPoolData(ctx context.Context, client *liteapi.Client, poolAddr ton.AccountID) (string, *poolData) {
+func fetchPoolData(ctx context.Context, client LiteClient, poolAddr ton.AccountID) (string, *poolData) {
 	// Fast path: confirmed type from a previous call.
 	if cached, ok := poolTypeCache.Load(poolAddr); ok {
 		info := cached.(cachedPoolInfo)
@@ -250,7 +249,7 @@ type poolEntry struct {
 // fetchRawPastElections calls past_elections() on the elector contract and returns
 // the parsed election tuples. This is shared between getAllPoolAddresses and
 // FetchValidationRounds.
-func fetchRawPastElections(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) ([]RawPastElection, error) {
+func fetchRawPastElections(ctx context.Context, client LiteClient, electorAddr ton.AccountID) ([]RawPastElection, error) {
 	stack, err := retry(func() (tlb.VmStack, error) {
 		model.CountRPC(ctx)
 		_, stack, err := client.RunSmcMethodByID(ctx, electorAddr, utils.MethodIdFromName("past_elections"), tlb.VmStack{})
@@ -288,7 +287,7 @@ func fetchRawPastElections(ctx context.Context, client *liteapi.Client, electorA
 }
 
 // getAllPoolAddresses returns a map from validator pubkey to poolEntry.
-func getAllPoolAddresses(ctx context.Context, client *liteapi.Client, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
+func getAllPoolAddresses(ctx context.Context, client LiteClient, electorAddr ton.AccountID) (map[tlb.Bits256]poolEntry, error) {
 	parsed, err := fetchRawPastElections(ctx, client, electorAddr)
 	if err != nil {
 		return nil, err
