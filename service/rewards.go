@@ -243,7 +243,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			if pd.NominatorsAmount != nil {
 				validatorRewards[i].NominatorsStake = &model.BigInt{Int: *pd.NominatorsAmount}
 			}
-			totalPoolStake := new(big.Int)
+			totalPoolStake := new(big.Int) // todo - why we don't get it from state of the elector?
 			if pd.ValidatorAmount != nil {
 				totalPoolStake.Add(totalPoolStake, pd.ValidatorAmount)
 			}
@@ -258,50 +258,71 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 				return nil
 			}
 
-			totalAmount := pd.NominatorsAmount
-			// Nominator share of true_stake: nominators don't own the validator's own stake.
-			nominatorsStake := new(big.Int).Set(validatorRows[i].trueStake)
-			if totalAmount != nil && totalAmount.Cmp(nominatorsStake) < 0 {
-				nominatorsStake.Set(totalAmount)
-			}
+			// totalAmount := pd.NominatorsAmount
+			// // Nominator share of true_stake: nominators don't own the validator's own stake.
+			// nominatorsStake := new(big.Int).Set(validatorRows[i].trueStake)
 
-			rewardShare := big.NewInt(int64(pd.RewardShare))
-			tenThousand := big.NewInt(10000)
-			validatorReward := validatorRows[i].reward
+			// // todo - why that can happen?
+			// if totalAmount != nil && totalAmount.Cmp(nominatorsStake) < 0 {
+			// 	nominatorsStake.Set(totalAmount)
+			// }
 
-			for _, n := range pd.Nominators {
-				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
-				nAmount := new(big.Int).SetUint64(n.Amount)
-				var nomWeight float64
-				nomReward := new(big.Int)
-				nomStaked := new(big.Int)
-				if totalAmount != nil && totalAmount.Sign() > 0 {
-					nomWeight, _ = new(big.Float).Quo(
-						new(big.Float).SetInt(nAmount),
-						new(big.Float).SetInt(totalAmount),
-					).Float64()
-					// nomStaked = nominatorsStake * nAmount / totalAmount
-					// nomStaked.Div(new(big.Int).Mul(nominatorsStake, nAmount), totalAmount)
-					nomStaked = utils.MulDiv(nominatorsStake, nAmount, totalAmount)
-					// nomReward = validatorReward * nomStaked * (10000 - rewardShare) / (trueStake * 10000)
-					if validatorRows[i].trueStake.Sign() > 0 {
-						nomReward.Div(
-							new(big.Int).Mul(
-								new(big.Int).Mul(validatorReward, nomStaked),
-								new(big.Int).Sub(tenThousand, rewardShare),
-							),
-							new(big.Int).Mul(validatorRows[i].trueStake, tenThousand),
-						)
-					}
+			if poolType == poolTypeNominatorV10 {
+				/**
+				int validator_reward = (reward * validator_reward_share) / 10000;
+				if (validator_reward > reward) { ;; Theoretical invalid case if validator_reward_share > 10000
+					validator_reward = reward;
 				}
-				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
-					Address:        addr.ToHuman(true, false),
-					Weight:         nomWeight,
-					Reward:         &model.BigInt{Int: *nomReward},
-					EffectiveStake: &model.BigInt{Int: *nomStaked},
-					Stake:          &model.BigInt{Int: *nAmount},
-				})
+				validator_amount += validator_reward;
+				nominators_reward = reward - validator_reward;
+				*/
+
+				rewardShare := big.NewInt(int64(pd.RewardShare))
+				tenThousand := big.NewInt(10000)
+				totalValidatorReward := validatorRows[i].reward
+				validatorSelfReward := big.NewInt(0)
+
+				validatorSelfReward = utils.MulDiv(totalValidatorReward, rewardShare, tenThousand)
+
+				if validatorSelfReward.Cmp(totalValidatorReward) > 0 {
+					validatorSelfReward.Set(totalValidatorReward)
+				}
+
+				nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
+
+				nominatorsTotalStake := pd.NominatorsAmount
+
+				for _, n := range pd.Nominators {
+					addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
+					nominatorStake := new(big.Int).SetUint64(n.Amount)
+					nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
+
+					// total stake 5
+					// effective stake 3
+					// weight 3/5 = 0.6
+
+					// nominator stake 4
+					// nominator effective stake = 4 * 0.6 = 2.4
+					//                             4 * 3 / 5 = 2.4
+
+					// nominator effective stake = nominator stake * effective stake / total stake
+
+					nominatorStakeMulEffectiveStake := utils.MulDiv(
+						nominatorStake,
+						validatorRows[i].trueStake,
+						totalPoolStake,
+					)
+
+					validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
+						Address:        addr.ToHuman(true, false),
+						Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
+						Reward:         &model.BigInt{Int: *nominatorReward},
+						EffectiveStake: &model.BigInt{Int: *nominatorStakeMulEffectiveStake},
+						Stake:          &model.BigInt{Int: *nominatorStake},
+					})
+				}
 			}
+
 			return nil
 		})
 	}
