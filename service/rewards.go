@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/tonkeeper/validators-statistics/utils"
 )
 
 func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
@@ -173,7 +174,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		pool      string
 		poolAddr  *ton.AccountID
 	}
-	rows := make([]validatorRow, len(validators))
+	validatorRows := make([]validatorRow, len(validators))
 	for i, v := range validators {
 		pk := v.PubKey()
 		row := validatorRow{v: v, trueStake: new(big.Int), reward: new(big.Int)}
@@ -183,17 +184,17 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			row.poolAddr = &addr
 			row.trueStake.Set(pe.TrueStake)
 			// reward = bonuses * trueStake / totalTrueStake
-			row.reward.Div(new(big.Int).Mul(bonuses, pe.TrueStake), totalTrueStake)
+			row.reward = utils.MulDiv(bonuses, pe.TrueStake, totalTrueStake)
 		}
-		rows[i] = row
+		validatorRows[i] = row
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].trueStake.Cmp(rows[j].trueStake) > 0 })
+	sort.Slice(validatorRows, func(i, j int) bool { return validatorRows[i].trueStake.Cmp(validatorRows[j].trueStake) > 0 })
 
 	// 10. Collect pool data + nominator split (parallel).
-	entries := make([]model.ValidatorReward, len(rows))
+	entries := make([]model.ValidatorReward, len(validatorRows))
 	g2 := new(errgroup.Group)
 
-	for i, row := range rows {
+	for i, row := range validatorRows {
 		var share float64
 		if totalTrueStake.Sign() > 0 {
 			share, _ = new(big.Float).Quo(
@@ -259,14 +260,14 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 
 			totalAmount := pd.NominatorsAmount
 			// Nominator share of true_stake: nominators don't own the validator's own stake.
-			nominatorsStake := new(big.Int).Set(rows[i].trueStake)
+			nominatorsStake := new(big.Int).Set(validatorRows[i].trueStake)
 			if totalAmount != nil && totalAmount.Cmp(nominatorsStake) < 0 {
 				nominatorsStake.Set(totalAmount)
 			}
 
 			rewardShare := big.NewInt(int64(pd.RewardShare))
 			tenThousand := big.NewInt(10000)
-			validatorReward := rows[i].reward
+			validatorReward := validatorRows[i].reward
 
 			for _, n := range pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
@@ -280,15 +281,16 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 						new(big.Float).SetInt(totalAmount),
 					).Float64()
 					// nomStaked = nominatorsStake * nAmount / totalAmount
-					nomStaked.Div(new(big.Int).Mul(nominatorsStake, nAmount), totalAmount)
+					// nomStaked.Div(new(big.Int).Mul(nominatorsStake, nAmount), totalAmount)
+					nomStaked = utils.MulDiv(nominatorsStake, nAmount, totalAmount)
 					// nomReward = validatorReward * nomStaked * (10000 - rewardShare) / (trueStake * 10000)
-					if rows[i].trueStake.Sign() > 0 {
+					if validatorRows[i].trueStake.Sign() > 0 {
 						nomReward.Div(
 							new(big.Int).Mul(
 								new(big.Int).Mul(validatorReward, nomStaked),
 								new(big.Int).Sub(tenThousand, rewardShare),
 							),
-							new(big.Int).Mul(rows[i].trueStake, tenThousand),
+							new(big.Int).Mul(validatorRows[i].trueStake, tenThousand),
 						)
 					}
 				}
@@ -306,14 +308,14 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	_ = g2.Wait()
 
 	out := &model.RoundRewardsOutput{
-		ElectionID:     electionID,
-		RoundStart:     time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
-		RoundEnd:       time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
-		StartBlock:     startExt.Seqno,
-		EndBlock:       endBlock,
-		TotalBonuses:   &model.BigInt{Int: *bonuses},
-		TotalStake:     &model.BigInt{Int: *electionTotalStake},
-		Validators:     entries,
+		ElectionID:   electionID,
+		RoundStart:   time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
+		RoundEnd:     time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
+		StartBlock:   startExt.Seqno,
+		EndBlock:     endBlock,
+		TotalBonuses: &model.BigInt{Int: *bonuses},
+		TotalStake:   &model.BigInt{Int: *electionTotalStake},
+		Validators:   entries,
 	}
 	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
 	nextID := int64(until)
