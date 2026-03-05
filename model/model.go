@@ -91,7 +91,6 @@ type ValidationRoundsOutput struct {
 
 // RoundsQuery holds query parameters for the validation-rounds endpoint.
 type RoundsQuery struct {
-	Limit      int
 	ElectionID *int64
 	Block      *uint32
 }
@@ -104,16 +103,16 @@ type RoundRewardsQuery struct {
 
 // RoundRewardsOutput is the response for the round-rewards endpoint.
 type RoundRewardsOutput struct {
-	ResponseTimeMs int64              `json:"response_time_ms"`
-	ElectionID     int64              `json:"election_id"`
-	RoundStart     string             `json:"round_start"`
-	RoundEnd       string             `json:"round_end"`
-	StartBlock     uint32             `json:"start_block"`
-	EndBlock       uint32             `json:"end_block"`
-	TotalBonuses   *BigInt            `json:"total_bonuses"`
-	TotalStake     *BigInt            `json:"total_stake"`
-	Validators     []ValidatorReward  `json:"validators"`
-	Error          string             `json:"error,omitempty"`
+	ResponseTimeMs int64             `json:"response_time_ms"`
+	ElectionID     int64             `json:"election_id"`
+	RoundStart     string            `json:"round_start"`
+	RoundEnd       string            `json:"round_end"`
+	StartBlock     uint32            `json:"start_block"`
+	EndBlock       uint32            `json:"end_block"`
+	TotalBonuses   *BigInt           `json:"total_bonuses"`
+	TotalStake     *BigInt           `json:"total_stake"`
+	Validators     []ValidatorReward `json:"validators"`
+	Error          string            `json:"error,omitempty"`
 }
 
 // ValidatorReward holds per-validator reward data for a finished round.

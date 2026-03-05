@@ -98,10 +98,7 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 		anchorExt = ext
 	}
 
-	limit := query.Limit
-	if query.ElectionID != nil {
-		limit = 1
-	}
+	limit := 1
 
 	now := time.Now()
 	var rounds []roundInfo

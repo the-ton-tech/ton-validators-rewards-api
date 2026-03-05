@@ -61,16 +61,7 @@ func (h *Service) HandleValidationRounds(w http.ResponseWriter, r *http.Request)
 	start := time.Now()
 	ctx := model.WithRPCCounter(r.Context())
 
-	q := model.RoundsQuery{Limit: 10}
-
-	if s := r.URL.Query().Get("limit"); s != "" {
-		v, err := strconv.Atoi(s)
-		if err != nil || v < 1 {
-			writeError(w, fmt.Sprintf("invalid limit %q", s), http.StatusBadRequest)
-			return
-		}
-		q.Limit = v
-	}
+	q := model.RoundsQuery{}
 
 	hasElection := r.URL.Query().Get("election_id") != ""
 	hasBlock := r.URL.Query().Get("block") != ""
