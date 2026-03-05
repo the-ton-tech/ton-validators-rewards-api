@@ -15,28 +15,19 @@ import (
 	"github.com/tonkeeper/validators-statistics/model"
 )
 
-type lookUpResult struct {
-	ext  ton.BlockIDExt
-	time time.Time
-}
-
 func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
 	var anchorExt ton.BlockIDExt
 	switch {
 	case block_seqno != nil:
-		res, err := retry(func() (lookUpResult, error) {
-			ext, time, err := lookupMasterchainBlock(ctx, client, *block_seqno)
-			return lookUpResult{ext: ext, time: time}, err
-		})
+		ext, _, err := lookupMasterchainBlock(ctx, client, *block_seqno)
+
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *block_seqno, err)
 		}
-		anchorExt = res.ext
+		anchorExt = ext
 
 	case election_id != nil:
-		ext, err := retry(func() (ton.BlockIDExt, error) {
-			return lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
-		})
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
 		}

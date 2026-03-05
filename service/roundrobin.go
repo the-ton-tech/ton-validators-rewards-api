@@ -84,15 +84,28 @@ func hasConnections(c *liteapi.Client) bool {
 	return false
 }
 
-func (r *RoundRobinClient) nextClient() (clientEntry, int) {
+func (r *RoundRobinClient) nextClient(ctx context.Context) (clientEntry, int) {
 	entries := r.entries
 	n := len(entries)
 	if n == 0 {
 		return clientEntry{}, -1
 	}
-	// Build list of healthy client indices (avoid reusing same server repeatedly).
+	var excluded map[int]bool
+	if v := ctx.Value(retryExcludeKey{}); v != nil {
+		ex := v.(*RetryExclude)
+		ex.mu.Lock()
+		excluded = make(map[int]bool)
+		for k, v := range ex.Excluded {
+			excluded[k] = v
+		}
+		ex.mu.Unlock()
+	}
+	// Build list of healthy client indices, excluding any in the retry exclude list.
 	healthy := make([]int, 0, n)
 	for i, e := range entries {
+		if excluded[i] {
+			continue
+		}
 		if hasConnections(e.client) {
 			healthy = append(healthy, i)
 		}
@@ -101,15 +114,21 @@ func (r *RoundRobinClient) nextClient() (clientEntry, int) {
 		idx := int(atomic.AddUint64(&r.counter, 1)) % n
 		return entries[idx], idx
 	}
-	// Round-robin among healthy clients only.
+	// Round-robin among healthy, non-excluded clients only.
 	pos := int(atomic.AddUint64(&r.counter, 1)) % len(healthy)
 	idx := healthy[pos]
 	return entries[idx], idx
 }
 
-func (r *RoundRobinClient) clientForRequest() *liteapi.Client {
-	e, id := r.nextClient()
-	log.Printf("lite request client_id=%d server=%s", id, e.host)
+func (r *RoundRobinClient) clientForRequest(ctx context.Context) *liteapi.Client {
+	e, id := r.nextClient(ctx)
+	// log.Printf("lite request client_id=%d server=%s", id, e.host)
+	if v := ctx.Value(retryExcludeKey{}); v != nil {
+		ex := v.(*RetryExclude)
+		ex.mu.Lock()
+		ex.LastUsed = id
+		ex.mu.Unlock()
+	}
 	c := e.client
 	if r.targetBlock != nil {
 		return c.WithBlock(*r.targetBlock)
@@ -127,25 +146,25 @@ func (r *RoundRobinClient) WithBlock(block ton.BlockIDExt) LiteClient {
 }
 
 func (r *RoundRobinClient) GetMasterchainInfo(ctx context.Context) (liteclient.LiteServerMasterchainInfoC, error) {
-	return r.clientForRequest().GetMasterchainInfo(ctx)
+	return r.clientForRequest(ctx).GetMasterchainInfo(ctx)
 }
 
 func (r *RoundRobinClient) LookupBlock(ctx context.Context, blockID ton.BlockID, mode uint32, lt *uint64, utime *uint32) (ton.BlockIDExt, tlb.BlockInfo, error) {
-	return r.clientForRequest().LookupBlock(ctx, blockID, mode, lt, utime)
+	return r.clientForRequest(ctx).LookupBlock(ctx, blockID, mode, lt, utime)
 }
 
 func (r *RoundRobinClient) GetBlock(ctx context.Context, blockID ton.BlockIDExt) (tlb.Block, error) {
-	return r.clientForRequest().GetBlock(ctx, blockID)
+	return r.clientForRequest(ctx).GetBlock(ctx, blockID)
 }
 
 func (r *RoundRobinClient) GetAccountState(ctx context.Context, accountID ton.AccountID) (tlb.ShardAccount, error) {
-	return r.clientForRequest().GetAccountState(ctx, accountID)
+	return r.clientForRequest(ctx).GetAccountState(ctx, accountID)
 }
 
 func (r *RoundRobinClient) GetConfigParams(ctx context.Context, mode liteapi.ConfigMode, paramList []uint32) (tlb.ConfigParams, error) {
-	return r.clientForRequest().GetConfigParams(ctx, mode, paramList)
+	return r.clientForRequest(ctx).GetConfigParams(ctx, mode, paramList)
 }
 
 func (r *RoundRobinClient) RunSmcMethodByID(ctx context.Context, accountID ton.AccountID, methodID int, params tlb.VmStack) (uint32, tlb.VmStack, error) {
-	return r.clientForRequest().RunSmcMethodByID(ctx, accountID, methodID, params)
+	return r.clientForRequest(ctx).RunSmcMethodByID(ctx, accountID, methodID, params)
 }

@@ -51,7 +51,8 @@ func lookupMasterchainBlock(ctx context.Context, client LiteClient, seqno uint32
 		ext  ton.BlockIDExt
 		time time.Time
 	}
-	r, err := retry(func() (result, error) {
+	ctx, _ = WithRetryExclude(ctx)
+	r, err := retryWithExclude(ctx, func() (result, error) {
 		model.CountRPC(ctx)
 		ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
 		if err != nil {
@@ -87,7 +88,8 @@ func lookupMasterchainBlockByUtime(ctx context.Context, client LiteClient, utime
 		Workchain: -1,
 		Shard:     0x8000000000000000,
 	}
-	ext, err := retry(func() (ton.BlockIDExt, error) {
+	ctx, _ = WithRetryExclude(ctx)
+	ext, err := retryWithExclude(ctx, func() (ton.BlockIDExt, error) {
 		model.CountRPC(ctx)
 		ext, _, err := client.LookupBlock(ctx, blockID, 4, nil, &utime)
 		if err != nil {
