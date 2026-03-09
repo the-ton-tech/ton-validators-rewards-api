@@ -23,7 +23,7 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 	"github.com/tonkeeper/tongo/utils"
 
-	"github.com/tonkeeper/validators-statistics/service"
+	"github.com/the-ton-tech/ton-validators-rewards-api/service"
 )
 
 var electorAddr = ton.AccountID{

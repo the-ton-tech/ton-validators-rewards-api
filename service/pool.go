@@ -14,7 +14,7 @@ import (
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 
-	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
 )
 
 // poolTypeCache caches pool types for addresses that don't need fresh data.

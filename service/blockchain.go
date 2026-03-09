@@ -9,7 +9,7 @@ import (
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 
-	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
 )
 
 // electorAddr is the well-known address of the TON elector contract (-1:333...333).

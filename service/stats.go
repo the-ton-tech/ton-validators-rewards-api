@@ -12,7 +12,7 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
 )
 
 func msgAddressToHuman(addr tlb.MsgAddress, bounce bool) (string, bool) {

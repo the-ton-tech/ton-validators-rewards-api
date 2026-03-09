@@ -11,7 +11,7 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
 )
 
 // roundInfo holds intermediate data for a single validation round.

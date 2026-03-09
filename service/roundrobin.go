@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const tracerName = "github.com/tonkeeper/validators-statistics/service/liteclient"
+const tracerName = "github.com/the-ton-tech/ton-validators-rewards-api/service/liteclient"
 
 // LiteClient is the interface for blockchain operations. Implemented by
 // RoundRobinClient and used by all service methods.

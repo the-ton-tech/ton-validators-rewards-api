@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tonkeeper/validators-statistics/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
 )
 
 // ValidatorService describes the methods the API layer needs from the service layer.

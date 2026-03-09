@@ -12,8 +12,8 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/tonkeeper/validators-statistics/model"
-	"github.com/tonkeeper/validators-statistics/utils"
+	"github.com/the-ton-tech/ton-validators-rewards-api/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/utils"
 )
 
 func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {

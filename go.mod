@@ -1,4 +1,4 @@
-module github.com/tonkeeper/validators-statistics
+module github.com/the-ton-tech/ton-validators-rewards-api
 
 go 1.25.0
 

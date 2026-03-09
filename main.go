@@ -9,8 +9,8 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
-	"github.com/tonkeeper/validators-statistics/api"
-	"github.com/tonkeeper/validators-statistics/service"
+	"github.com/the-ton-tech/ton-validators-rewards-api/api"
+	"github.com/the-ton-tech/ton-validators-rewards-api/service"
 	"github.com/uptrace/uptrace-go/uptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
