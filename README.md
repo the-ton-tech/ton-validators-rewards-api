@@ -29,7 +29,15 @@ docker build -t ton-validators-rewards-api .
 docker run -p 8080:8080 ton-validators-rewards-api
 ```
 
-On first launch the TON global config is downloaded and cached in memory for 7 days (per process). While the app is running, the lite client is refreshed after TTL so config can be reloaded without restart. The client connects to all available liteservers in parallel.
+To use a custom liteserver config (e.g. your own archival nodes), mount it and pass `-config`:
+
+```bash
+docker run -p 8080:8080 \
+  -v $(pwd)/config.json:/config.json:ro \
+  ton-validators-rewards-api -config /config.json
+```
+
+On first launch the TON global config is downloaded and cached in memory for 7 days (per process). When a custom config is provided via `-config`, it is used directly instead. While the app is running, the lite client is refreshed after TTL so config can be reloaded without restart. The client connects to all available liteservers in parallel.
 
 ## API
 
@@ -44,6 +52,94 @@ Raw OpenAPI 3.0 specification.
 ### `GET /health`
 
 Returns `{"status":"ok"}`.
+
+### `GET /api/validation-rounds`
+
+Returns past and current validation rounds with boundaries, stakes, and bonuses.
+
+Query parameters:
+
+| Parameter     | Type  | Description                                                      |
+|---------------|-------|------------------------------------------------------------------|
+| `election_id` | int64 | Return the single round matching this election ID                |
+| `block`       | uint32| Find the round containing this masterchain block seqno           |
+
+`election_id` and `block` are mutually exclusive. If neither is provided, uses the latest block.
+
+Response:
+
+```json
+{
+  "response_time_ms": 1234,
+  "rounds": [
+    {
+      "election_id": 1740053384,
+      "start": "2026-02-20T12:09:44Z",
+      "end": "2026-02-21T06:22:00Z",
+      "start_block": 57480000,
+      "end_block": 57546000,
+      "finished": true,
+      "prev_election_id": 1772486024,
+      "next_election_id": 1772658824
+    }
+  ]
+}
+```
+
+### `GET /api/round-rewards`
+
+Computes per-validator and per-nominator reward distribution for a finished validation round.
+
+Query parameters:
+
+| Parameter     | Type  | Description                                                      |
+|---------------|-------|------------------------------------------------------------------|
+| `election_id` | int64 | Election ID of the finished round                                |
+| `block`       | uint32| Masterchain block seqno within the finished round                |
+
+`election_id` and `block` are mutually exclusive. At least one is required.
+
+Response:
+
+```json
+{
+  "response_time_ms": 5432,
+  "election_id": 1740053384,
+  "prev_election_id": 1772486024,
+  "next_election_id": 1772658824,
+  "round_start": "2026-02-20T12:09:44Z",
+  "round_end": "2026-02-21T06:22:00Z",
+  "start_block": 57480000,
+  "end_block": 57546000,
+  "total_bonuses": "75327775732769",
+  "total_stake": "457752122739238021",
+  "validators": [
+    {
+      "rank": 1,
+      "pubkey": "e33f0e53552f951e...",
+      "effective_stake": "2127654606060000",
+      "weight": 0.004648,
+      "reward": "348738674222",
+      "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
+      "pool_type": "nominator-pool-v1.0",
+      "total_stake": "2387001628702831",
+      "validator_stake": "7045821473255",
+      "nominators_stake": "2379606506684221",
+      "validator_reward_share": 0.3,
+      "nominators_count": 1,
+      "nominators": [
+        {
+          "address": "EQBdcnCvPwcmBf...",
+          "weight": 1.0,
+          "reward": "243360777736",
+          "effective_stake": "2124977795706504",
+          "stake": "2379606506684221"
+        }
+      ]
+    }
+  ]
+}
+```
 
 ### `GET /api/validators`
 
@@ -130,7 +226,7 @@ Response:
 | `pool_type` | Contract type: `"nominator-pool-v1.0"`, `"single-nominator-pool-v1.0"`, `"single-nominator-pool-v1.1"`, or `"other"` |
 | `validator_stake` | Validator's own funds deposited into the pool (nanoTON). Nominator pool only |
 | `nominators_stake` | Sum of all nominator deposits in the pool (nanoTON). Nominator pool only |
-| `total_stake` | Total funds in the pool. For nominator pools: `validator_stake + nominators_stake`. For others: approximated from contract balance + effective stake |
+| `total_stake` | Total funds deposited by the pool: `effective_stake + credit` (leftover balance kept in the elector contract after election) |
 | `validator_reward_share` | Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator pool only |
 | `nominators_count` | Number of nominators in the pool. Nominator pool only |
 | `nominators` | List of individual nominators. Nominator pool only |
@@ -150,18 +246,20 @@ Key distinction: `stake` / `total_stake` is what was deposited into the pool, wh
 ## Project structure
 
 ```
-main.go                Entry point — wires service, API, and Swagger routes
-openapi.yaml           OpenAPI 3.0 specification (embedded in binary)
-model/model.go         JSON response types
-model/rpccount.go      Per-request RPC call counter (context-based)
-service/service.go     Service struct with DI for liteapi client
-service/client.go      TON lite client initialization + config caching
-service/stats.go       FetchStats() — core data-fetching orchestrator
-service/pool.go        Pool type detection (by code hash), past_elections parsing
-service/blockchain.go  Block lookup, round info, validator extraction
-api/handler.go         HTTP handlers, ValidatorService interface
-api/swagger.go         Swagger UI HTML template
-Dockerfile             Multi-stage build (scratch)
+main.go                  Entry point — wires service, API, and Swagger routes
+openapi.yaml             OpenAPI 3.0 specification (embedded in binary)
+model/model.go           JSON response types
+model/rpccount.go        Per-request RPC call counter (context-based)
+service/service.go       Service struct with DI for liteapi client
+service/client.go        TON lite client initialization + config caching
+service/blocks.go        FetchPerBlockRewards() — per-block validator stats
+service/rounds.go        FetchRoundRewards(), FetchValidationRounds() — round-level data
+service/shared.go        Shared helpers: buildValidatorRows, fetchRoundData, etc.
+service/pool.go          Pool type detection (by code hash), past_elections parsing
+service/blockchain.go    Block lookup, round info, validator extraction
+api/handler.go           HTTP handlers, ValidatorService interface
+api/swagger.go           Swagger UI HTML template
+Dockerfile               Multi-stage build (scratch)
 ```
 
 Dependency graph (no cycles):

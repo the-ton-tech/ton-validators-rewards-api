@@ -295,8 +295,8 @@ components:
           allOf:
             - $ref: "#/components/schemas/NanoTON"
             - description: >
-                Total funds in the pool. For nominator pools: validator_stake + nominators_stake.
-                For others: approximated from contract balance + effective stake.
+                Total funds deposited by the pool: effective_stake + credit
+                (leftover balance kept in the elector contract after election).
         validator_reward_share:
           type: number
           format: double
@@ -492,7 +492,11 @@ components:
         nominators_stake:
           $ref: "#/components/schemas/NanoTON"
         total_stake:
-          $ref: "#/components/schemas/NanoTON"
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Total funds deposited by the pool: effective_stake + credit
+                (leftover balance kept in the elector contract after election).
         validator_reward_share:
           type: number
           format: double
