@@ -205,9 +205,9 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		validatorRewards[i] = model.ValidatorReward{
 			Rank:           i + 1,
 			Pubkey:         fmt.Sprintf("%x", row.v.PubKey()),
-			EffectiveStake: &model.BigInt{Int: *row.trueStake},
+			EffectiveStake: row.trueStake,
 			Weight:         share,
-			Reward:         &model.BigInt{Int: *row.reward},
+			Reward:         row.reward,
 			Pool:           row.pool,
 		}
 
@@ -238,10 +238,10 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 
 			// Nominator Pool: use data from GetPoolData + ListNominators.
 			if pd.ValidatorAmount != nil {
-				validatorRewards[i].ValidatorStake = &model.BigInt{Int: *pd.ValidatorAmount}
+				validatorRewards[i].ValidatorStake = pd.ValidatorAmount
 			}
 			if pd.NominatorsAmount != nil {
-				validatorRewards[i].NominatorsStake = &model.BigInt{Int: *pd.NominatorsAmount}
+				validatorRewards[i].NominatorsStake = pd.NominatorsAmount
 			}
 			totalPoolStake := new(big.Int) // todo - why we don't get it from state of the elector?
 			if pd.ValidatorAmount != nil {
@@ -250,7 +250,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			if pd.NominatorsAmount != nil {
 				totalPoolStake.Add(totalPoolStake, pd.NominatorsAmount)
 			}
-			validatorRewards[i].TotalStake = &model.BigInt{Int: *totalPoolStake}
+			validatorRewards[i].TotalStake = totalPoolStake
 			validatorRewards[i].ValidatorRewardShare = float64(pd.RewardShare) / 10000.0
 			validatorRewards[i].NominatorsCount = pd.NominatorsCount
 
@@ -316,9 +316,9 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 					validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 						Address:        addr.ToHuman(true, false),
 						Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
-						Reward:         &model.BigInt{Int: *nominatorReward},
-						EffectiveStake: &model.BigInt{Int: *nominatorStakeMulEffectiveStake},
-						Stake:          &model.BigInt{Int: *nominatorStake},
+						Reward:         nominatorReward,
+						EffectiveStake: nominatorStakeMulEffectiveStake,
+						Stake:          nominatorStake,
 					})
 				}
 			}
@@ -334,8 +334,8 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		RoundEnd:     time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
 		StartBlock:   startExt.Seqno,
 		EndBlock:     endBlock,
-		TotalBonuses: &model.BigInt{Int: *bonuses},
-		TotalStake:   &model.BigInt{Int: *electionTotalStake},
+		TotalBonuses: bonuses,
+		TotalStake:   electionTotalStake,
 		Validators:   validatorRewards,
 	}
 	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
