@@ -322,8 +322,7 @@ type poolEntry struct {
 }
 
 // fetchRawPastElections calls past_elections() on the elector contract and returns
-// the parsed election tuples. This is shared between getAllPoolAddresses and
-// FetchValidationRounds.
+// the parsed election tuples.
 func fetchRawPastElections(ctx context.Context, client LiteClient, electorAddr ton.AccountID) ([]RawPastElection, error) {
 	stack, err := retry(func() (tlb.VmStack, error) {
 		model.CountRPC(ctx)

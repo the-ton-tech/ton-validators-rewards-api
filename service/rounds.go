@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/big"
 	"sort"
 	"sync/atomic"
 	"time"
 
+	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/the-ton-tech/ton-validators-rewards-api/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/utils"
 )
 
 // roundInfo holds intermediate data for a single validation round.
@@ -33,6 +36,26 @@ func roundFetchErr(err error) string {
 		return "state already gc'd"
 	}
 	return err.Error()
+}
+
+func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
+	var anchorExt ton.BlockIDExt
+	switch {
+	case block_seqno != nil:
+		ext, _, err := lookupMasterchainBlock(ctx, client, *block_seqno)
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *block_seqno, err)
+		}
+		anchorExt = ext
+
+	case election_id != nil:
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
+		}
+		anchorExt = ext
+	}
+	return &anchorExt, nil
 }
 
 // fetchPrevElectionIDForBlock returns the election_id of the round containing (startBlock - 1).
@@ -73,6 +96,181 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 	}
 	since, until = getRoundInfo(conf)
 	return since, until, nil
+}
+
+// FetchRoundRewards computes per-validator and per-nominator reward distribution
+// for a finished validation round using the elector's bonuses value.
+func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery) (*model.RoundRewardsOutput, error) {
+	client := s.currentClient()
+
+	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
+	if err != nil || anchor == nil {
+		return nil, fmt.Errorf("getAnchorExt error or nil: %w", err)
+	}
+	anchorExt := *anchor
+
+	// Resolve round boundaries from config param 34.
+	since, until, err := getConfigParam34(ctx, client, anchorExt)
+	if err != nil {
+		return nil, fmt.Errorf("getConfigParam34: %w", err)
+	}
+	if since == 0 {
+		return nil, fmt.Errorf("config param 34 is empty at block %d", anchorExt.Seqno)
+	}
+
+	// Verify the round is finished.
+	if time.Unix(int64(until), 0).After(time.Now()) {
+		return nil, fmt.Errorf("round %d is not finished yet (ends %s)", since, time.Unix(int64(until), 0).UTC().Format(time.RFC3339))
+	}
+
+	// Resolve start_block and end_block.
+	startExt, err := lookupMasterchainBlockByUtime(ctx, client, since)
+	if err != nil {
+		return nil, fmt.Errorf("lookupMasterchainBlockByUtime(since=%d): %w", since, err)
+	}
+	endExt, err := lookupMasterchainBlockByUtime(ctx, client, until)
+	if err != nil {
+		return nil, fmt.Errorf("lookupMasterchainBlockByUtime(until=%d): %w", until, err)
+	}
+	endBlock := endExt.Seqno - 1 // end_block is the last block of this round
+
+	// Pin to end_block + 1 and fetch data in parallel.
+	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, endExt.Seqno)
+	if err != nil {
+		return nil, fmt.Errorf("lookupMasterchainBlock(end+1=%d): %w", endExt.Seqno, err)
+	}
+	pinned := client.WithBlock(pinnedExt)
+
+	// fetchRoundData: parallel fetches for config, pools, and past elections at end_block+1.
+	rd, err := fetchRoundData(ctx, pinned)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build validator rows.
+	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no validators found in config param 34 at block %d", pinnedExt.Seqno)
+	}
+
+	if totalTrueStake.Sign() == 0 {
+		return nil, fmt.Errorf("total true stake is zero — no pool data available")
+	}
+
+	// Find matching election and extract bonuses + total_stake.
+	electionID := int64(since)
+	el := findElection(rd.elections, electionID)
+	if el == nil || el.Bonuses == nil {
+		return nil, fmt.Errorf("election %d not found in past_elections or bonuses not available", electionID)
+	}
+	bonuses := el.Bonuses
+	electionTotalStake := el.TotalStake
+
+	// Compute per-validator rewards and sort.
+	type rewardRow struct {
+		validatorRow
+		reward *big.Int
+	}
+	rewardRows := make([]rewardRow, len(rows))
+	for i, row := range rows {
+		// reward = bonuses * trueStake / totalTrueStake
+		reward := utils.MulDiv(bonuses, row.trueStake, totalTrueStake)
+		rewardRows[i] = rewardRow{validatorRow: row, reward: reward}
+	}
+	sort.Slice(rewardRows, func(i, j int) bool { return rewardRows[i].trueStake.Cmp(rewardRows[j].trueStake) > 0 })
+
+	// nominatorGroup: fetch pool data and compute nominator reward split in parallel per validator.
+	validatorRewards := make([]model.ValidatorReward, len(rewardRows))
+	nominatorGroup := new(errgroup.Group)
+
+	for i, row := range rewardRows {
+		validatorRewards[i] = model.ValidatorReward{
+			Rank:           i + 1,
+			Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
+			EffectiveStake: row.trueStake,
+			Weight:         validatorWeight(row.trueStake, totalTrueStake),
+			Reward:         row.reward,
+			Pool:           row.pool,
+		}
+
+		if row.poolAddr == nil {
+			continue
+		}
+
+		nominatorGroup.Go(func() error {
+			poolAddr := *row.poolAddr
+			info := resolvePoolAddresses(ctx, pinned, poolAddr)
+			validatorRewards[i].PoolType = info.poolType
+			validatorRewards[i].ValidatorAddress = info.validatorAddress
+			validatorRewards[i].OwnerAddress = info.ownerAddress
+
+			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
+				return nil
+			}
+
+			// Nominator Pool: extract metadata and compute per-nominator rewards.
+			meta := computeNominatorPoolMeta(info.pd)
+			validatorRewards[i].ValidatorStake = meta.validatorStake
+			validatorRewards[i].NominatorsStake = meta.nominatorsStake
+			validatorRewards[i].TotalStake = meta.totalPoolStake
+			validatorRewards[i].ValidatorRewardShare = meta.validatorRewardShare
+			validatorRewards[i].NominatorsCount = meta.nominatorsCount
+
+			if info.pd.Nominators == nil {
+				return nil
+			}
+
+			// Reward split following elector-code.fc:
+			// validator_reward = (reward * validator_reward_share) / 10000
+			// nominators_reward = reward - validator_reward
+			rewardShare := big.NewInt(int64(info.pd.RewardShare))
+			tenThousand := big.NewInt(10000)
+			totalValidatorReward := row.reward
+
+			validatorSelfReward := utils.MulDiv(totalValidatorReward, rewardShare, tenThousand)
+			if validatorSelfReward.Cmp(totalValidatorReward) > 0 {
+				validatorSelfReward.Set(totalValidatorReward)
+			}
+
+			nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
+			nominatorsTotalStake := info.pd.NominatorsAmount
+
+			for _, n := range info.pd.Nominators {
+				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
+				nominatorStake := new(big.Int).SetUint64(n.Amount)
+				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
+
+				// nominatorEffectiveStake = nominatorStake * trueStake / totalPoolStake
+				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, meta.totalPoolStake)
+
+				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
+					Address:        addr.ToHuman(true, false),
+					Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
+					Reward:         nominatorReward,
+					EffectiveStake: nominatorEffectiveStake,
+					Stake:          nominatorStake,
+				})
+			}
+
+			return nil
+		})
+	}
+	_ = nominatorGroup.Wait()
+
+	out := &model.RoundRewardsOutput{
+		ElectionID:   electionID,
+		RoundStart:   time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
+		RoundEnd:     time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
+		StartBlock:   startExt.Seqno,
+		EndBlock:     endBlock,
+		TotalBonuses: bonuses,
+		TotalStake:   electionTotalStake,
+		Validators:   validatorRewards,
+	}
+	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
+	nextID := int64(until)
+	out.NextElectionID = &nextID
+	return out, nil
 }
 
 // FetchValidationRounds returns metadata for past and current validation rounds.

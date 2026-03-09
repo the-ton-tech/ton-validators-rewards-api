@@ -14,7 +14,7 @@ import (
 
 // ValidatorService describes the methods the API layer needs from the service layer.
 type ValidatorService interface {
-	FetchStats(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error)
+	FetchPerBlockRewards(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error)
 	FetchValidationRounds(ctx context.Context, query model.RoundsQuery) (*model.ValidationRoundsOutput, error)
 	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery) (*model.RoundRewardsOutput, error)
 }
@@ -42,9 +42,9 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 
 	includeNominators := r.URL.Query().Get("nominators") != "false"
 
-	out, err := h.svc.FetchStats(ctx, seqno, includeNominators)
+	out, err := h.svc.FetchPerBlockRewards(ctx, seqno, includeNominators)
 	if err != nil {
-		log.Printf("FetchStats error: %v", err)
+		log.Printf("FetchPerBlockRewards error: %v", err)
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
