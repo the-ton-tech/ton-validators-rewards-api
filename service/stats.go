@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/the-ton-tech/ton-validators-rewards-api/model"
+	"github.com/the-ton-tech/ton-validators-rewards-api/utils"
 )
 
 func msgAddressToHuman(addr tlb.MsgAddress, bounce bool) (string, bool) {
@@ -70,11 +71,12 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		rewardPerBlock = new(big.Int)
 	)
 
-	g := new(errgroup.Group)
+	// fetchGroup: parallel fetches for config, pools, elector balance, and per-block reward.
+	fetchGroup := new(errgroup.Group)
 
 	// Block time (only when seqno was nil — deferred from block resolution).
 	if needBlockTime {
-		g.Go(func() error {
+		fetchGroup.Go(func() error {
 			_, btime, err := lookupMasterchainBlock(ctx, client, blockIDExt.Seqno)
 			if err == nil {
 				blockTime = btime
@@ -84,7 +86,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	}
 
 	// Config param 34: current validators.
-	g.Go(func() error {
+	fetchGroup.Go(func() error {
 		c, err := retry(func() (*ton.BlockchainConfig, error) {
 			model.CountRPC(ctx)
 			params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
@@ -105,7 +107,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	})
 
 	// Pool addresses and true stakes from past_elections.
-	g.Go(func() error {
+	fetchGroup.Go(func() error {
 		p, err := getAllPoolAddresses(ctx, pinned, electorAddr)
 		if err != nil {
 			log.Printf("warning: pool addresses: %v", err)
@@ -115,7 +117,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	})
 
 	// Elector balance.
-	g.Go(func() error {
+	fetchGroup.Go(func() error {
 		bal, err := retry(func() (uint64, error) {
 			model.CountRPC(ctx)
 			st, err := pinned.GetAccountState(ctx, electorAddr)
@@ -131,7 +133,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	})
 
 	// Per-block reward = fees_collected from ValueFlow.
-	g.Go(func() error {
+	fetchGroup.Go(func() error {
 		reward, err := retry(func() (uint64, error) {
 			model.CountRPC(ctx)
 			block, err := client.GetBlock(ctx, blockIDExt)
@@ -146,7 +148,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
+	if err := fetchGroup.Wait(); err != nil {
 		return nil, err
 	}
 
@@ -155,11 +157,11 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	// Validation round timing from config param 34.
 	roundSince, roundUntil := getRoundInfo(conf)
 
-	// Resolve round start/end block seqnos in parallel.
+	// blockGroup: resolve round start/end block seqnos in parallel.
 	var roundStartBlock, roundEndBlock uint32
-	g3 := new(errgroup.Group)
+	blockGroup := new(errgroup.Group)
 	if roundSince > 0 {
-		g3.Go(func() error {
+		blockGroup.Go(func() error {
 			ext, err := lookupMasterchainBlockByUtime(ctx, client, roundSince)
 			if err == nil {
 				roundStartBlock = ext.Seqno
@@ -168,7 +170,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		})
 	}
 	if roundUntil > 0 && time.Unix(int64(roundUntil), 0).Before(time.Now()) {
-		g3.Go(func() error {
+		blockGroup.Go(func() error {
 			ext, err := lookupMasterchainBlockByUtime(ctx, client, roundUntil)
 			if err == nil {
 				roundEndBlock = ext.Seqno
@@ -176,7 +178,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return nil
 		})
 	}
-	_ = g3.Wait()
+	_ = blockGroup.Wait()
 
 	out := model.Output{
 		Block: model.BlockInfo{
@@ -240,9 +242,9 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].trueStake.Cmp(rows[j].trueStake) > 0 })
 
-	// Collect nominators and build final validator list (parallel).
+	// nominatorGroup: fetch pool data and nominator details in parallel per validator.
 	entries := make([]model.ValidatorEntry, len(rows))
-	g2 := new(errgroup.Group)
+	nominatorGroup := new(errgroup.Group)
 
 	for i, row := range rows {
 		pk := row.v.PubKey()
@@ -267,7 +269,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			continue
 		}
 
-		g2.Go(func() error {
+		nominatorGroup.Go(func() error {
 			poolAddr := *row.poolAddr
 			poolType, pd := fetchPoolData(ctx, pinned, poolAddr)
 			entries[i].PoolType = poolType
@@ -331,7 +333,6 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			}
 
 			rewardShare := big.NewInt(int64(pd.RewardShare))
-			tenThousand := big.NewInt(10000)
 
 			for _, n := range pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
@@ -340,20 +341,15 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 				nomPerBlock := new(big.Int)
 				nomStaked := new(big.Int)
 				if totalAmount != nil && totalAmount.Sign() > 0 {
-					nomWeight, _ = new(big.Float).Quo(
-						new(big.Float).SetInt(nAmount),
-						new(big.Float).SetInt(totalAmount),
-					).Float64()
+					nomWeight = utils.InaccurateDivFloat(nAmount, totalAmount)
 					// nomStaked = nominatorsStake * nAmount / totalAmount
-					nomStaked.Div(new(big.Int).Mul(nominatorsStake, nAmount), totalAmount)
-					// nomPerBlock = rewardPerBlock * nomStaked * (10000 - rewardShare) / (totalTrueStake * 10000)
-					nomPerBlock.Div(
-						new(big.Int).Mul(
-							new(big.Int).Mul(rewardPerBlock, nomStaked),
-							new(big.Int).Sub(tenThousand, rewardShare),
-						),
-						new(big.Int).Mul(totalTrueStake, tenThousand),
-					)
+					nomStaked = utils.MulDiv(nominatorsStake, nAmount, totalAmount)
+					// nomShareOfReward = 10000 - rewardShare
+					nomShareOfReward := new(big.Int).Sub(big.NewInt(10000), rewardShare)
+					// nomPerBlock = rewardPerBlock * nomStaked * nomShareOfReward / (totalTrueStake * 10000)
+					// equal to (rewardPerBlock*nomStaked/totalTrueStake)*nomShareOfReward/10000
+					// Complete formula: rewardPerBlock * nomStaked * (10000 - rewardShare) / (totalTrueStake * 10000)
+					nomPerBlock = utils.MulDiv(utils.MulDiv(rewardPerBlock, nomStaked, totalTrueStake), nomShareOfReward, big.NewInt(10000))
 				}
 				entries[i].Nominators = append(entries[i].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(true, false),
@@ -366,7 +362,7 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 			return nil
 		})
 	}
-	_ = g2.Wait()
+	_ = nominatorGroup.Wait()
 
 	out.Validators = entries
 	return &out, nil
