@@ -52,8 +52,7 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start)
 	out.ResponseTimeMs = elapsed.Milliseconds()
 	log.Printf("GET /api/validators: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 // HandleValidationRounds handles GET /api/validation-rounds.
@@ -100,8 +99,7 @@ func (h *Service) HandleValidationRounds(w http.ResponseWriter, r *http.Request)
 	elapsed := time.Since(start)
 	out.ResponseTimeMs = elapsed.Milliseconds()
 	log.Printf("GET /api/validation-rounds: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 // HandleRoundRewards handles GET /api/round-rewards.
@@ -152,8 +150,7 @@ func (h *Service) HandleRoundRewards(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start)
 	out.ResponseTimeMs = elapsed.Milliseconds()
 	log.Printf("GET /api/round-rewards: %dms, %d RPC calls", elapsed.Milliseconds(), model.RPCCount(ctx))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 // writeError writes a structured JSON error response.

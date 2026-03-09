@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -98,6 +99,32 @@ func lookupMasterchainBlockByUtime(ctx context.Context, client LiteClient, utime
 		return ext, nil
 	})
 	return ext, err
+}
+
+// computeReturnedStake calls the elector's compute_returned_stake(addr) get method.
+// Returns the credits balance for the given address.
+func computeReturnedStake(ctx context.Context, client LiteClient, addr ton.AccountID) (*big.Int, error) {
+	addrInt := new(big.Int).SetBytes(addr.Address[:])
+	param := tlb.VmStackValue{
+		SumType:  "VmStkInt",
+		VmStkInt: tlb.Int257(*addrInt),
+	}
+	stack, err := retry(func() (tlb.VmStack, error) {
+		model.CountRPC(ctx)
+		_, stack, err := client.RunSmcMethod(ctx, electorAddr, "compute_returned_stake", tlb.VmStack{param})
+		return stack, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compute_returned_stake(%s): %w", addr.ToRaw(), err)
+	}
+	if len(stack) == 0 {
+		return nil, fmt.Errorf("compute_returned_stake(%s): empty stack", addr.ToRaw())
+	}
+	val := extractBigInt(stack[0])
+	if val == nil {
+		return nil, fmt.Errorf("compute_returned_stake(%s): unexpected stack type %s", addr.ToRaw(), stack[0].SumType)
+	}
+	return val, nil
 }
 
 // extractValidators returns all ValidatorDescr entries from config param 34.
