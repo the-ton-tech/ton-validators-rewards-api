@@ -65,10 +65,12 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	// Fetch independent data in parallel.
 	var (
-		conf           *ton.BlockchainConfig
-		pools          map[tlb.Bits256]poolEntry
-		electorBalance = new(big.Int)
-		rewardPerBlock = new(big.Int)
+		conf              *ton.BlockchainConfig
+		pools             map[tlb.Bits256]poolEntry
+		electorBalance    = new(big.Int)
+		rewardPerBlock    = new(big.Int)
+		currentElections  []RawPastElection
+		previousElections []RawPastElection
 	)
 
 	// fetchGroup: parallel fetches for config, pools, elector balance, and per-block reward.
@@ -132,18 +134,28 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 		return nil
 	})
 
-	// Per-block reward = fees_collected from ValueFlow.
+	// Past elections at current block (for bonus diff calculation).
 	fetchGroup.Go(func() error {
-		reward, err := retry(func() (uint64, error) {
-			model.CountRPC(ctx)
-			block, err := client.GetBlock(ctx, blockIDExt)
-			if err != nil {
-				return 0, err
-			}
-			return uint64(block.ValueFlow.FeesCollected.Grams), nil
-		})
+		parsed, err := fetchRawPastElections(ctx, pinned, electorAddr)
 		if err == nil {
-			rewardPerBlock.SetUint64(reward)
+			currentElections = parsed
+		}
+		return nil
+	})
+
+	// Past elections at previous block (for bonus diff calculation).
+	fetchGroup.Go(func() error {
+		if blockIDExt.Seqno <= 1 {
+			return nil
+		}
+		prevExt, _, err := lookupMasterchainBlock(ctx, client, blockIDExt.Seqno-1)
+		if err != nil {
+			return nil
+		}
+		prevPinned := client.WithBlock(prevExt)
+		parsed, err := fetchRawPastElections(ctx, prevPinned, electorAddr)
+		if err == nil {
+			previousElections = parsed
 		}
 		return nil
 	})
@@ -156,6 +168,25 @@ func (s *Service) FetchStats(ctx context.Context, seqno *uint32, includeNominato
 
 	// Validation round timing from config param 34.
 	roundSince, roundUntil := getRoundInfo(conf)
+
+	// Per-block reward = bonus diff between current and previous block in elector.
+	electionID := int64(roundSince)
+	var currentBonuses, prevBonuses *big.Int
+	for _, el := range currentElections {
+		if el.ElectAt == electionID {
+			currentBonuses = el.Bonuses
+			break
+		}
+	}
+	for _, el := range previousElections {
+		if el.ElectAt == electionID {
+			prevBonuses = el.Bonuses
+			break
+		}
+	}
+	if currentBonuses != nil && prevBonuses != nil {
+		rewardPerBlock.Sub(currentBonuses, prevBonuses)
+	}
 
 	// blockGroup: resolve round start/end block seqnos in parallel.
 	var roundStartBlock, roundEndBlock uint32
