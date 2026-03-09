@@ -16,3 +16,5 @@ ton-validators-rewards-api
 archival-config.json
 
 __debug_bin*
+cmd/roundcheck/round.json
+cmd/roundcheck/block.json

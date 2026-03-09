@@ -189,7 +189,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
 	// nominatorGroup: fetch pool data and nominator details in parallel per validator.
-	entries := make([]model.ValidatorEntry, len(rows))
+	validators := make([]model.ValidatorEntry, len(rows))
 	nominatorGroup := new(errgroup.Group)
 
 	for i, row := range rows {
@@ -199,7 +199,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 			perBlockNT = utils.MulDiv(rewardPerBlock, row.trueStake, totalTrueStake)
 		}
 
-		entries[i] = model.ValidatorEntry{
+		validators[i] = model.ValidatorEntry{
 			Rank:           i + 1,
 			Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
 			EffectiveStake: row.trueStake,
@@ -215,34 +215,28 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 		nominatorGroup.Go(func() error {
 			poolAddr := *row.poolAddr
 			info := resolvePoolAddresses(ctx, pinned, poolAddr)
-			entries[i].PoolType = info.poolType
-			entries[i].ValidatorAddress = info.validatorAddress
-			entries[i].OwnerAddress = info.ownerAddress
+			validators[i].PoolType = info.poolType
+			validators[i].ValidatorAddress = info.validatorAddress
+			validators[i].OwnerAddress = info.ownerAddress
+
+			// TotalStake from elector: true_stake + credit (leftover balance kept in contract after election)
+			credit, err := computeReturnedStake(ctx, pinned, poolAddr)
+			if err != nil {
+				log.Printf("warning: computeReturnedStake(%s): %v", poolAddr.ToRaw(), err)
+				credit = new(big.Int)
+			}
+			validators[i].TotalStake = new(big.Int).Add(rows[i].trueStake, credit)
 
 			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
-				// Non-Nominator Pool: fetch contract balance, approximate total.
-				contractBal, err := retry(func() (uint64, error) {
-					model.CountRPC(ctx)
-					st, err := pinned.GetAccountState(ctx, poolAddr)
-					if err != nil {
-						return 0, err
-					}
-					return uint64(st.Account.Account.Storage.Balance.Grams), nil
-				})
-				if err == nil {
-					total := new(big.Int).Add(new(big.Int).SetUint64(contractBal), rows[i].trueStake)
-					entries[i].TotalStake = total
-				}
 				return nil
 			}
 
 			// Nominator Pool: extract metadata and compute per-nominator rewards.
 			meta := computeNominatorPoolMeta(info.pd)
-			entries[i].ValidatorStake = meta.validatorStake
-			entries[i].NominatorsStake = meta.nominatorsStake
-			entries[i].TotalStake = meta.totalPoolStake
-			entries[i].ValidatorRewardShare = meta.validatorRewardShare
-			entries[i].NominatorsCount = meta.nominatorsCount
+			validators[i].ValidatorStake = meta.validatorStake
+			validators[i].NominatorsStake = meta.nominatorsStake
+			validators[i].ValidatorRewardShare = meta.validatorRewardShare
+			validators[i].NominatorsCount = meta.nominatorsCount
 
 			if info.pd.Nominators == nil {
 				return nil
@@ -272,7 +266,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 					// nomPerBlock = rewardPerBlock * nomStaked * nomShareOfReward / (totalTrueStake * 10000)
 					nomPerBlock = utils.MulDiv(utils.MulDiv(rewardPerBlock, nomStaked, totalTrueStake), nomShareOfReward, big.NewInt(10000))
 				}
-				entries[i].Nominators = append(entries[i].Nominators, model.NominatorEntry{
+				validators[i].Nominators = append(validators[i].Nominators, model.NominatorEntry{
 					Address:        addr.ToHuman(true, false),
 					Weight:         nomWeight,
 					PerBlockReward: nomPerBlock,
@@ -285,6 +279,6 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 	}
 	_ = nominatorGroup.Wait()
 
-	out.Validators = entries
+	out.Validators = validators
 	return &out, nil
 }

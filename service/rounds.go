@@ -204,6 +204,14 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			validatorRewards[i].ValidatorAddress = info.validatorAddress
 			validatorRewards[i].OwnerAddress = info.ownerAddress
 
+			// TotalStake from elector: true_stake + credit (leftover balance kept in contract after election)
+			credit, err := computeReturnedStake(ctx, pinned, poolAddr)
+			if err != nil {
+				log.Printf("warning: computeReturnedStake(%s): %v", poolAddr.ToRaw(), err)
+				credit = new(big.Int)
+			}
+			validatorRewards[i].TotalStake = new(big.Int).Add(row.trueStake, credit)
+
 			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
 				return nil
 			}
@@ -212,7 +220,6 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			meta := computeNominatorPoolMeta(info.pd)
 			validatorRewards[i].ValidatorStake = meta.validatorStake
 			validatorRewards[i].NominatorsStake = meta.nominatorsStake
-			validatorRewards[i].TotalStake = meta.totalPoolStake
 			validatorRewards[i].ValidatorRewardShare = meta.validatorRewardShare
 			validatorRewards[i].NominatorsCount = meta.nominatorsCount
 
@@ -233,19 +240,18 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			}
 
 			nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
-			nominatorsTotalStake := info.pd.NominatorsAmount
 
 			for _, n := range info.pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nominatorStake := new(big.Int).SetUint64(n.Amount)
-				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
+				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, validatorRewards[i].TotalStake)
 
-				// nominatorEffectiveStake = nominatorStake * trueStake / totalPoolStake
-				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, meta.totalPoolStake)
+				// nominatorEffectiveStake = nominatorStake * trueStake / nominatorsTotalStake
+				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, validatorRewards[i].TotalStake)
 
 				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
-					Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
+					Weight:         utils.InaccurateDivFloat(nominatorStake, meta.nominatorsStake),
 					Reward:         nominatorReward,
 					EffectiveStake: nominatorEffectiveStake,
 					Stake:          nominatorStake,
