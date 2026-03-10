@@ -275,6 +275,17 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nominatorStake := new(big.Int).SetUint64(n.Amount)
 				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
+
+				// total stake 5
+				// effective stake 3
+				// weight 3/5 = 0.6
+
+				// nominator stake 4
+				// nominator effective stake = 4 * 0.6 = 2.4
+				//                             4 * 3 / 5 = 2.4
+
+				// nominator effective stake = nominator stake * effective stake / total stake
+
 				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, nominatorsTotalStake)
 
 				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
