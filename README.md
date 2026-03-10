@@ -150,7 +150,6 @@ Query parameters:
 | Parameter    | Type   | Description                                      |
 |--------------|--------|--------------------------------------------------|
 | `seqno`      | uint32 | Masterchain block seqno (defaults to latest)     |
-| `nominators` | string | Set to `false` to skip nominator data            |
 
 Response:
 

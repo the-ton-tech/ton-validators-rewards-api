@@ -138,14 +138,6 @@ paths:
           schema:
             type: integer
             format: uint32
-        - name: nominators
-          in: query
-          description: Set to `false` to skip nominator data.
-          required: false
-          schema:
-            type: string
-            enum: ["true", "false"]
-            default: "true"
       responses:
         "200":
           description: Successful response

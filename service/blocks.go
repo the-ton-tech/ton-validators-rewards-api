@@ -14,7 +14,7 @@ import (
 )
 
 // FetchPerBlockRewards fetches validator statistics for the given seqno (or latest if nil).
-func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, includeNominators bool) (*model.Output, error) {
+func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*model.Output, error) {
 	client := s.currentClient()
 
 	// Resolve the target block: use provided seqno or fall back to latest.
