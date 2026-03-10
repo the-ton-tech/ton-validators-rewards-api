@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/tonkeeper/tongo/tlb"
@@ -188,36 +189,43 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 	out.TotalStake = totalTrueStake
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
-	// nominatorGroup: fetch pool data and nominator details in parallel per validator.
-	validators := make([]model.ValidatorEntry, len(rows))
-	nominatorGroup := new(errgroup.Group)
-
+	// Compute per-validator rewards and sort.
+	type rewardRow struct {
+		validatorRow
+		reward *big.Int
+	}
+	rewardRows := make([]rewardRow, len(rows))
 	for i, row := range rows {
-		// perBlockNT = rewardPerBlock * trueStake / totalTrueStake
-		perBlockNT := new(big.Int)
-		if rewardPerBlock.Sign() > 0 && totalTrueStake.Sign() > 0 {
-			perBlockNT = utils.MulDiv(rewardPerBlock, row.trueStake, totalTrueStake)
-		}
+		// reward = bonuses * trueStake / totalTrueStake
+		reward := utils.MulDiv(rewardPerBlock, row.trueStake, totalTrueStake)
+		rewardRows[i] = rewardRow{validatorRow: row, reward: reward}
+	}
+	sort.Slice(rewardRows, func(i, j int) bool { return rewardRows[i].trueStake.Cmp(rewardRows[j].trueStake) > 0 })
 
-		validators[i] = model.ValidatorEntry{
-			Rank:           i + 1,
-			Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
-			EffectiveStake: row.trueStake,
-			Weight:         validatorWeight(row.trueStake, totalTrueStake),
-			PerBlockReward: perBlockNT,
-			Pool:           row.pool,
-		}
+	// rewardGroup: fetch pool data and compute nominator reward split in parallel per validator.
+	validatorRewards := make([]model.ValidatorReward, len(rewardRows))
+	rewardGroup := new(errgroup.Group)
 
-		if row.poolAddr == nil || !includeNominators {
-			continue
-		}
+	for i, row := range rewardRows {
+		rewardGroup.Go(func() error {
+			validatorRewards[i] = model.ValidatorReward{
+				Rank:           i + 1,
+				Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
+				EffectiveStake: row.trueStake,
+				Weight:         validatorWeight(row.trueStake, totalTrueStake),
+				Reward:         row.reward,
+				Pool:           row.pool,
+			}
 
-		nominatorGroup.Go(func() error {
+			if row.poolAddr == nil {
+				return nil
+			}
+
 			poolAddr := *row.poolAddr
 			info := resolvePoolAddresses(ctx, pinned, poolAddr)
-			validators[i].PoolType = info.poolType
-			validators[i].ValidatorAddress = info.validatorAddress
-			validators[i].OwnerAddress = info.ownerAddress
+			validatorRewards[i].PoolType = info.poolType
+			validatorRewards[i].ValidatorAddress = info.validatorAddress
+			validatorRewards[i].OwnerAddress = info.ownerAddress
 
 			// TotalStake from elector: true_stake + credit (leftover balance kept in contract after election)
 			credit, err := computeReturnedStake(ctx, pinned, poolAddr)
@@ -225,60 +233,114 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 				log.Printf("warning: computeReturnedStake(%s): %v", poolAddr.ToRaw(), err)
 				credit = new(big.Int)
 			}
-			validators[i].TotalStake = new(big.Int).Add(rows[i].trueStake, credit)
+			validatorRewards[i].TotalStake = new(big.Int).Add(row.trueStake, credit)
 
+			// return if not a nominator pool, next steps is not applicable
 			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
 				return nil
 			}
 
 			// Nominator Pool: extract metadata and compute per-nominator rewards.
 			meta := computeNominatorPoolMeta(info.pd)
-			validators[i].ValidatorStake = meta.validatorStake
-			validators[i].NominatorsStake = meta.nominatorsStake
-			validators[i].ValidatorRewardShare = meta.validatorRewardShare
-			validators[i].NominatorsCount = meta.nominatorsCount
+			validatorRewards[i].ValidatorStake = meta.validatorStake
+			validatorRewards[i].NominatorsStake = meta.nominatorsStake
+			validatorRewards[i].ValidatorRewardShare = meta.validatorRewardShare
+			validatorRewards[i].NominatorsCount = meta.nominatorsCount
 
 			if info.pd.Nominators == nil {
 				return nil
 			}
 
-			totalAmount := info.pd.NominatorsAmount
-			// Nominator share of true_stake: nominators don't own the validator's own stake.
-			nominatorsStake := new(big.Int).Set(rows[i].trueStake)
-			if totalAmount != nil && totalAmount.Cmp(nominatorsStake) < 0 {
-				nominatorsStake.Set(totalAmount)
-			}
+			// Reward split following elector-code.fc:
+			// validatorSelfReward = (totalValidatorReward * rewardShare) / 10000
+			// nominatorsReward = totalValidatorReward - validator_reward
 
 			rewardShare := big.NewInt(int64(info.pd.RewardShare))
+			tenThousand := big.NewInt(10000)
+			totalValidatorReward := validatorRewards[i].Reward
+
+			validatorSelfReward := utils.MulDiv(totalValidatorReward, rewardShare, tenThousand)
+			// Theoretical invalid case if rewardShare > 10000
+			if validatorSelfReward.Cmp(totalValidatorReward) > 0 {
+				validatorSelfReward.Set(totalValidatorReward)
+			}
+
+			nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
+			nominatorsTotalStake := info.pd.NominatorsAmount
 
 			for _, n := range info.pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
-				nAmount := new(big.Int).SetUint64(n.Amount)
-				var nomWeight float64
-				nomPerBlock := new(big.Int)
-				nomStaked := new(big.Int)
-				if totalAmount != nil && totalAmount.Sign() > 0 {
-					nomWeight = utils.InaccurateDivFloat(nAmount, totalAmount)
-					// nomStaked = nominatorsStake * nAmount / totalAmount
-					nomStaked = utils.MulDiv(nominatorsStake, nAmount, totalAmount)
-					// nomShareOfReward = 10000 - rewardShare
-					nomShareOfReward := new(big.Int).Sub(big.NewInt(10000), rewardShare)
-					// nomPerBlock = rewardPerBlock * nomStaked * nomShareOfReward / (totalTrueStake * 10000)
-					nomPerBlock = utils.MulDiv(utils.MulDiv(rewardPerBlock, nomStaked, totalTrueStake), nomShareOfReward, big.NewInt(10000))
-				}
-				validators[i].Nominators = append(validators[i].Nominators, model.NominatorEntry{
+				nominatorStake := new(big.Int).SetUint64(n.Amount)
+				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
+
+				// total stake 5
+				// effective stake 3
+				// weight 3/5 = 0.6
+
+				// nominator stake 4
+				// nominator effective stake = 4 * 0.6 = 2.4
+				//                             4 * 3 / 5 = 2.4
+
+				// nominator effective stake = nominator stake * effective stake / total stake
+				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, nominatorsTotalStake)
+
+				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
-					Weight:         nomWeight,
-					PerBlockReward: nomPerBlock,
-					EffectiveStake: nomStaked,
-					Stake:          nAmount,
+					Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
+					Reward:         nominatorReward,
+					EffectiveStake: nominatorEffectiveStake,
+					Stake:          nominatorStake,
 				})
 			}
+
 			return nil
 		})
 	}
-	_ = nominatorGroup.Wait()
+	_ = rewardGroup.Wait()
 
-	out.Validators = validators
+	out.Validators = buildValidatorEntries(validatorRewards)
 	return &out, nil
+}
+
+func buildValidatorEntries(validatorRewards []model.ValidatorReward) []model.ValidatorEntry {
+	validatorEntries := make([]model.ValidatorEntry, len(validatorRewards))
+	for i, validatorReward := range validatorRewards {
+		validatorEntries[i] = model.ValidatorEntry{
+			Rank:                 validatorReward.Rank,
+			Pubkey:               validatorReward.Pubkey,
+			EffectiveStake:       validatorReward.EffectiveStake,
+			Weight:               validatorReward.Weight,
+			PerBlockReward:       validatorReward.Reward,
+			Pool:                 validatorReward.Pool,
+			PoolType:             validatorReward.PoolType,
+			OwnerAddress:         validatorReward.OwnerAddress,
+			ValidatorAddress:     validatorReward.ValidatorAddress,
+			TotalStake:           validatorReward.TotalStake,
+			ValidatorRewardShare: validatorReward.ValidatorRewardShare,
+			NominatorsCount:      validatorReward.NominatorsCount,
+		}
+		if validatorReward.PoolType == poolTypeNominatorV10 {
+			validatorEntries[i].ValidatorStake = validatorReward.ValidatorStake
+			validatorEntries[i].NominatorsStake = validatorReward.NominatorsStake
+			validatorEntries[i].ValidatorRewardShare = validatorReward.ValidatorRewardShare
+			validatorEntries[i].NominatorsCount = validatorReward.NominatorsCount
+			validatorEntries[i].Nominators = buildNominatorEntries(validatorReward.Nominators)
+
+		}
+	}
+	return validatorEntries
+}
+
+func buildNominatorEntries(nominatorRewards []model.NominatorReward) []model.NominatorEntry {
+	nominatorEntries := make([]model.NominatorEntry, len(nominatorRewards))
+	for i, nominatorReward := range nominatorRewards {
+		nominatorEntries[i] = model.NominatorEntry{
+			Address:        nominatorReward.Address,
+			Weight:         nominatorReward.Weight,
+			PerBlockReward: nominatorReward.Reward,
+			EffectiveStake: nominatorReward.EffectiveStake,
+			Stake:          nominatorReward.Stake,
+		}
+	}
+	return nominatorEntries
 }
