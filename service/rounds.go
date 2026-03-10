@@ -179,25 +179,25 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	}
 	sort.Slice(rewardRows, func(i, j int) bool { return rewardRows[i].trueStake.Cmp(rewardRows[j].trueStake) > 0 })
 
-	// nominatorGroup: fetch pool data and compute nominator reward split in parallel per validator.
+	// rewardGroup: fetch pool data and compute nominator reward split in parallel per validator.
 	validatorRewards := make([]model.ValidatorReward, len(rewardRows))
-	nominatorGroup := new(errgroup.Group)
+	rewardGroup := new(errgroup.Group)
 
 	for i, row := range rewardRows {
-		validatorRewards[i] = model.ValidatorReward{
-			Rank:           i + 1,
-			Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
-			EffectiveStake: row.trueStake,
-			Weight:         validatorWeight(row.trueStake, totalTrueStake),
-			Reward:         row.reward,
-			Pool:           row.pool,
-		}
+		rewardGroup.Go(func() error {
+			validatorRewards[i] = model.ValidatorReward{
+				Rank:           i + 1,
+				Pubkey:         fmt.Sprintf("%x", row.descr.PubKey()),
+				EffectiveStake: row.trueStake,
+				Weight:         validatorWeight(row.trueStake, totalTrueStake),
+				Reward:         row.reward,
+				Pool:           row.pool,
+			}
 
-		if row.poolAddr == nil {
-			continue
-		}
+			if row.poolAddr == nil {
+				return nil
+			}
 
-		nominatorGroup.Go(func() error {
 			poolAddr := *row.poolAddr
 			info := resolvePoolAddresses(ctx, pinned, poolAddr)
 			validatorRewards[i].PoolType = info.poolType
@@ -212,6 +212,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			}
 			validatorRewards[i].TotalStake = new(big.Int).Add(row.trueStake, credit)
 
+			// return if not a nominator pool, next steps is not applicable
 			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
 				return nil
 			}
@@ -228,30 +229,41 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			}
 
 			// Reward split following elector-code.fc:
-			// validator_reward = (reward * validator_reward_share) / 10000
-			// nominators_reward = reward - validator_reward
+			// validatorSelfReward = (totalValidatorReward * rewardShare) / 10000
+			// nominatorsReward = totalValidatorReward - validator_reward
+
 			rewardShare := big.NewInt(int64(info.pd.RewardShare))
 			tenThousand := big.NewInt(10000)
-			totalValidatorReward := row.reward
+			totalValidatorReward := validatorRewards[i].Reward
 
 			validatorSelfReward := utils.MulDiv(totalValidatorReward, rewardShare, tenThousand)
+			// Theoretical invalid case if rewardShare > 10000
 			if validatorSelfReward.Cmp(totalValidatorReward) > 0 {
 				validatorSelfReward.Set(totalValidatorReward)
 			}
 
 			nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
+			nominatorsTotalStake := info.pd.NominatorsAmount
 
 			for _, n := range info.pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nominatorStake := new(big.Int).SetUint64(n.Amount)
-				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, validatorRewards[i].TotalStake)
+				nominatorReward := utils.MulDiv(nominatorsReward, nominatorStake, nominatorsTotalStake)
 
-				// nominatorEffectiveStake = nominatorStake * trueStake / nominatorsTotalStake
-				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, validatorRewards[i].TotalStake)
+				// total stake 5
+				// effective stake 3
+				// weight 3/5 = 0.6
+
+				// nominator stake 4
+				// nominator effective stake = 4 * 0.6 = 2.4
+				//                             4 * 3 / 5 = 2.4
+
+				// nominator effective stake = nominator stake * effective stake / total stake
+				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, nominatorsTotalStake)
 
 				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
-					Weight:         utils.InaccurateDivFloat(nominatorStake, meta.nominatorsStake),
+					Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
 					Reward:         nominatorReward,
 					EffectiveStake: nominatorEffectiveStake,
 					Stake:          nominatorStake,
@@ -261,7 +273,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 			return nil
 		})
 	}
-	_ = nominatorGroup.Wait()
+	_ = rewardGroup.Wait()
 
 	out := &model.RoundRewardsOutput{
 		ElectionID:   electionID,
