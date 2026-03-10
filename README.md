@@ -174,7 +174,7 @@ Response:
       "pubkey": "e33f0e53552f951e...",
       "effective_stake": "2127654606060000",
       "weight": 0.004648,
-      "per_block_reward": "13614090",
+      "reward": "13614090",
       "total_stake": "2376902585342169",
       "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
       "pool_type": "nominator-pool-v1.0",
@@ -188,7 +188,7 @@ Response:
         {
           "address": "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB",
           "weight": 1.0,
-          "per_block_reward": "13614090",
+          "reward": "13614090",
           "effective_stake": "2127654606060000",
           "stake": "2176902585342169"
         }
@@ -219,7 +219,7 @@ Response:
 | `pubkey` | Validator's public key (hex-encoded Ed25519) |
 | `effective_stake` | Validator's true stake locked in the Elector contract (nanoTON) |
 | `weight` | Fraction of the total effective stake held by this validator (0–1) |
-| `per_block_reward` | Estimated reward this validator earns per masterchain block (nanoTON) |
+| `reward` | Estimated reward this validator earns per masterchain block (nanoTON) |
 | `pool` | Pool smart contract address (bounceable, base64url) |
 | `validator_address` | Validator's wallet address (the one that controls the node) |
 | `owner_address` | The single owner who deposited funds. Only present for single-nominator pools |
@@ -237,7 +237,7 @@ Response:
 |---|---|
 | `address` | Nominator's wallet address (bounceable, base64url) |
 | `weight` | Nominator's share of the total nominators' deposit (0–1) |
-| `per_block_reward` | Estimated per-block reward after the validator's cut (nanoTON) |
+| `reward` | Estimated per-block reward after the validator's cut (nanoTON) |
 | `effective_stake` | Nominator's proportional share of the effective stake locked in the Elector (nanoTON) |
 | `stake` | Nominator's raw deposit in the pool contract (nanoTON) |
 

@@ -22,7 +22,7 @@ type Output struct {
 	ElectorBalance  *big.Int         `json:"elector_balance"`
 	TotalStake      *big.Int         `json:"total_stake"`
 	RewardPerBlock  *big.Int         `json:"reward_per_block"`
-	Validators      []ValidatorEntry `json:"validators"`
+	Validators      []ValidatorReward `json:"validators"`
 }
 
 type BlockInfo struct {
@@ -37,23 +37,6 @@ type RoundInfo struct {
 	EndBlock   uint32 `json:"end_block,omitempty"`
 }
 
-type ValidatorEntry struct {
-	Rank                 int              `json:"rank"`
-	Pubkey               string           `json:"pubkey"`
-	EffectiveStake       *big.Int         `json:"effective_stake"`
-	Weight               float64          `json:"weight"`
-	PerBlockReward       *big.Int         `json:"per_block_reward"`
-	Pool                 string           `json:"pool,omitempty"`
-	OwnerAddress         string           `json:"owner_address,omitempty"`
-	ValidatorAddress     string           `json:"validator_address,omitempty"`
-	PoolType             string           `json:"pool_type,omitempty"`
-	ValidatorStake       *big.Int         `json:"validator_stake,omitempty"`
-	NominatorsStake      *big.Int         `json:"nominators_stake,omitempty"`
-	TotalStake           *big.Int         `json:"total_stake,omitempty"`
-	ValidatorRewardShare float64          `json:"validator_reward_share,omitempty"`
-	NominatorsCount      uint32           `json:"nominators_count,omitempty"`
-	Nominators           []NominatorEntry `json:"nominators,omitempty"`
-}
 
 type ValidationRound struct {
 	ElectionID     int64     `json:"election_id"`
@@ -129,10 +112,3 @@ type NominatorReward struct {
 	Stake          *big.Int `json:"stake"`
 }
 
-type NominatorEntry struct {
-	Address        string   `json:"address"`
-	Weight         float64  `json:"weight"`
-	PerBlockReward *big.Int `json:"per_block_reward"`
-	EffectiveStake *big.Int `json:"effective_stake"`
-	Stake          *big.Int `json:"stake"`
-}

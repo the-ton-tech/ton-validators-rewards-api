@@ -298,49 +298,6 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, inclu
 	}
 	_ = rewardGroup.Wait()
 
-	out.Validators = buildValidatorEntries(validatorRewards)
+	out.Validators = validatorRewards
 	return &out, nil
-}
-
-func buildValidatorEntries(validatorRewards []model.ValidatorReward) []model.ValidatorEntry {
-	validatorEntries := make([]model.ValidatorEntry, len(validatorRewards))
-	for i, validatorReward := range validatorRewards {
-		validatorEntries[i] = model.ValidatorEntry{
-			Rank:                 validatorReward.Rank,
-			Pubkey:               validatorReward.Pubkey,
-			EffectiveStake:       validatorReward.EffectiveStake,
-			Weight:               validatorReward.Weight,
-			PerBlockReward:       validatorReward.Reward,
-			Pool:                 validatorReward.Pool,
-			PoolType:             validatorReward.PoolType,
-			OwnerAddress:         validatorReward.OwnerAddress,
-			ValidatorAddress:     validatorReward.ValidatorAddress,
-			TotalStake:           validatorReward.TotalStake,
-			ValidatorRewardShare: validatorReward.ValidatorRewardShare,
-			NominatorsCount:      validatorReward.NominatorsCount,
-		}
-		if validatorReward.PoolType == poolTypeNominatorV10 {
-			validatorEntries[i].ValidatorStake = validatorReward.ValidatorStake
-			validatorEntries[i].NominatorsStake = validatorReward.NominatorsStake
-			validatorEntries[i].ValidatorRewardShare = validatorReward.ValidatorRewardShare
-			validatorEntries[i].NominatorsCount = validatorReward.NominatorsCount
-			validatorEntries[i].Nominators = buildNominatorEntries(validatorReward.Nominators)
-
-		}
-	}
-	return validatorEntries
-}
-
-func buildNominatorEntries(nominatorRewards []model.NominatorReward) []model.NominatorEntry {
-	nominatorEntries := make([]model.NominatorEntry, len(nominatorRewards))
-	for i, nominatorReward := range nominatorRewards {
-		nominatorEntries[i] = model.NominatorEntry{
-			Address:        nominatorReward.Address,
-			Weight:         nominatorReward.Weight,
-			PerBlockReward: nominatorReward.Reward,
-			EffectiveStake: nominatorReward.EffectiveStake,
-			Stake:          nominatorReward.Stake,
-		}
-	}
-	return nominatorEntries
 }

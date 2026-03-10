@@ -221,97 +221,6 @@ components:
           description: Masterchain block seqno at (or nearest to) validation round end.
           example: 57546000
 
-    NominatorEntry:
-      type: object
-      required: [address, weight, per_block_reward, effective_stake, stake]
-      properties:
-        address:
-          type: string
-          description: Nominator's wallet address (bounceable, base64url).
-          example: "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB"
-        weight:
-          type: number
-          format: double
-          description: Nominator's share of total nominators' deposit (0–1).
-          example: 0.15
-        per_block_reward:
-          $ref: "#/components/schemas/NanoTON"
-        effective_stake:
-          $ref: "#/components/schemas/NanoTON"
-        stake:
-          $ref: "#/components/schemas/NanoTON"
-
-    ValidatorEntry:
-      type: object
-      required: [rank, pubkey, effective_stake, weight, per_block_reward]
-      properties:
-        rank:
-          type: integer
-          description: Position sorted by effective stake (descending).
-          example: 1
-        pubkey:
-          type: string
-          description: Validator's public key (hex-encoded Ed25519).
-          example: "e33f0e53552f951e0a27c8e5a461a1bd65975af369a2c85a06e51f7fbb8ae667"
-        effective_stake:
-          $ref: "#/components/schemas/NanoTON"
-        weight:
-          type: number
-          format: double
-          description: Fraction of total effective stake (0–1).
-          example: 0.004648
-        per_block_reward:
-          $ref: "#/components/schemas/NanoTON"
-        pool:
-          type: string
-          description: Pool smart contract address (bounceable, base64url).
-          example: "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI"
-        pool_type:
-          type: string
-          description: Contract type detected by code hash.
-          enum:
-            - nominator-pool-v1.0
-            - single-nominator-pool-v1.0
-            - single-nominator-pool-v1.1
-            - other
-          example: "nominator-pool-v1.0"
-        owner_address:
-          type: string
-          description: Owner who deposited funds. Single-nominator pools only.
-          example: "EQB7..."
-        validator_address:
-          type: string
-          description: Validator's wallet address (controls the node).
-          example: "Ef9T..."
-        validator_stake:
-          allOf:
-            - $ref: "#/components/schemas/NanoTON"
-            - description: Validator's own funds deposited into the pool. Nominator pool only.
-        nominators_stake:
-          allOf:
-            - $ref: "#/components/schemas/NanoTON"
-            - description: Sum of all nominator deposits. Nominator pool only.
-        total_stake:
-          allOf:
-            - $ref: "#/components/schemas/NanoTON"
-            - description: >
-                Total funds deposited by the pool: effective_stake + credit
-                (leftover balance kept in the elector contract after election).
-        validator_reward_share:
-          type: number
-          format: double
-          description: Fraction of staking rewards kept by the validator (0.3 = 30%). Nominator pool only.
-          example: 0.3
-        nominators_count:
-          type: integer
-          format: uint32
-          description: Number of nominators in the pool. Nominator pool only.
-          example: 12
-        nominators:
-          type: array
-          description: Individual nominators. Nominator pool only.
-          items:
-            $ref: "#/components/schemas/NominatorEntry"
 
     ValidatorsResponse:
       type: object
@@ -360,7 +269,7 @@ components:
         validators:
           type: array
           items:
-            $ref: "#/components/schemas/ValidatorEntry"
+            $ref: "#/components/schemas/ValidatorRewardEntry"
 
     ValidationRound:
       type: object
