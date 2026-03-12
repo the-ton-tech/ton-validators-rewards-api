@@ -239,7 +239,9 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 				log.Printf("warning: computeReturnedStake(%s): %v", poolAddr.ToRaw(), err)
 				credit = new(big.Int)
 			}
-			validatorRewards[i].TotalStake = new(big.Int).Add(row.trueStake, credit)
+
+			totalStake := new(big.Int).Add(row.trueStake, credit)
+			validatorRewards[i].TotalStake = totalStake
 
 			if info.pd == nil || info.poolType != poolTypeNominatorV10 {
 				return nil
@@ -286,7 +288,7 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 
 				// nominator effective stake = nominator stake * effective stake / total stake
 
-				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, nominatorsTotalStake)
+				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, totalStake)
 
 				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
