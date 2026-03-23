@@ -180,12 +180,14 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 		EndBlock:   roundEndBlock,
 	}
 
-	// Build validator rows.
-	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
+	// Build validator rows (filtered by config param 34 for current round).
+	pools := filterPoolsByValidators(rd.conf, rd.pools)
+	rows, totalTrueStake := buildValidatorRows(pools)
 	log.Printf("active validators: %d", len(rows))
 	out.TotalStake = totalTrueStake
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
-	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock)
+	out.Validators = computeBaseRewards(rows, totalTrueStake, rewardPerBlock)
+	enrichValidatorRewards(ctx, pinned, out.Validators, rows)
 	return &out, nil
 }

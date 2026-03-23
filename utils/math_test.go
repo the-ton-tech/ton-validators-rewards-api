@@ -75,12 +75,17 @@ func TestMulDiv(t *testing.T) {
 }
 
 func TestMulDiv_DivisionByZero(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("MulDiv with c=0 should panic")
-		}
-	}()
-	MulDiv(big.NewInt(1), big.NewInt(1), big.NewInt(0))
+	got := MulDiv(big.NewInt(1), big.NewInt(1), big.NewInt(0))
+	if got.Sign() != 0 {
+		t.Errorf("MulDiv with c=0 should return 0, got %v", got)
+	}
+}
+
+func TestMulDiv_NilDivisor(t *testing.T) {
+	got := MulDiv(big.NewInt(1), big.NewInt(1), nil)
+	if got.Sign() != 0 {
+		t.Errorf("MulDiv with c=nil should return 0, got %v", got)
+	}
 }
 
 func TestMulDiv_DoesNotMutateInputs(t *testing.T) {

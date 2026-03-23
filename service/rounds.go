@@ -36,23 +36,24 @@ func roundFetchErr(err error) string {
 }
 
 func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
-	var anchorExt ton.BlockIDExt
 	switch {
 	case block_seqno != nil:
 		ext, _, err := lookupMasterchainBlock(ctx, client, *block_seqno)
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock(%d): %w", *block_seqno, err)
 		}
-		anchorExt = ext
+		return &ext, nil
 
 	case election_id != nil:
 		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
 		}
-		anchorExt = ext
+		return &ext, nil
+
+	default:
+		return nil, fmt.Errorf("either block_seqno or election_id must be provided")
 	}
-	return &anchorExt, nil
 }
 
 // fetchPrevElectionIDForBlock returns the election_id of the round containing (startBlock - 1).
@@ -131,39 +132,45 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	}
 	endBlock := endExt.Seqno - 1 // end_block is the last block of this round
 
-	// Pin to end_block + 1 and fetch data in parallel.
+	// Pin to end_block+1 (first block of next round) where past_elections contains round X data.
 	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, endExt.Seqno)
 	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlock(end+1=%d): %w", endExt.Seqno, err)
+		return nil, fmt.Errorf("lookupMasterchainBlock(end_block+1=%d): %w", endExt.Seqno, err)
 	}
 	pinned := client.WithBlock(pinnedExt)
 
-	// fetchRoundData: parallel fetches for config, pools, and past elections at end_block+1.
-	rd, err := fetchRoundData(ctx, pinned)
+	// Fetch past elections at end_block+1.
+	elections, err := fetchRawPastElections(ctx, pinned, electorAddr)
 	if err != nil {
-		return nil, err
-	}
-
-	// Build validator rows.
-	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("no validators found in config param 34 at block %d", pinnedExt.Seqno)
-	}
-
-	if totalTrueStake.Sign() == 0 {
-		return nil, fmt.Errorf("total true stake is zero — no pool data available")
+		return nil, fmt.Errorf("fetchRawPastElections: %w", err)
 	}
 
 	// Find matching election and extract bonuses + total_stake.
 	electionID := int64(since)
-	el := findElection(rd.elections, electionID)
+	el := findElection(elections, electionID)
 	if el == nil || el.Bonuses == nil {
 		return nil, fmt.Errorf("election %d not found in past_elections or bonuses not available", electionID)
 	}
+
+	// Build validator rows from the election's frozen dict.
+	pools, err := parseFrozenDict(el)
+	if err != nil {
+		return nil, fmt.Errorf("parseFrozenDict: %w", err)
+	}
+	rows, totalTrueStake := buildValidatorRows(pools)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no validators found in frozen dict for election %d", electionID)
+	}
+	if totalTrueStake.Sign() == 0 {
+		return nil, fmt.Errorf("total true stake is zero — no pool data available")
+	}
+
 	bonuses := el.Bonuses
 	electionTotalStake := el.TotalStake
 
-	validatorRewards := computeValidatorRewards(ctx, pinned, rows, totalTrueStake, bonuses)
+	// Compute base rewards (pure math), then enrich with pool data (I/O).
+	validatorRewards := computeBaseRewards(rows, totalTrueStake, bonuses)
+	enrichValidatorRewards(ctx, pinned, validatorRewards, rows)
 
 	out := &model.RoundRewardsOutput{
 		ElectionID:   electionID,

@@ -3,6 +3,9 @@ package utils
 import "math/big"
 
 func MulDiv(a, b, c *big.Int) *big.Int {
+	if c == nil || c.Sign() == 0 {
+		return new(big.Int)
+	}
 	return new(big.Int).Div(new(big.Int).Mul(a, b), c)
 }
 

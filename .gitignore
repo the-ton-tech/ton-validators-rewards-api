@@ -18,3 +18,7 @@ archival-config.json
 __debug_bin*
 cmd/roundcheck/round.json
 cmd/roundcheck/block.json
+cmd/paramcheck/paramcheck.log
+cmd/paramcheck/paramcheck_1774210824.json
+plan.md
+paramcheck
