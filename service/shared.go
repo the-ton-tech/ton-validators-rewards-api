@@ -31,7 +31,9 @@ type roundData struct {
 }
 
 // fetchRoundData fetches config param 34, pool addresses, and past elections in parallel.
-func fetchRoundData(ctx context.Context, pinned LiteClient) (roundData, error) {
+// roundPinned is used for config and pool data (should be pinned within the round).
+// electionsPinned is used for past elections (may need to be pinned after the round ends).
+func fetchRoundData(ctx context.Context, roundPinned, electionsPinned LiteClient) (roundData, error) {
 	var rd roundData
 	g := new(errgroup.Group)
 
@@ -39,7 +41,7 @@ func fetchRoundData(ctx context.Context, pinned LiteClient) (roundData, error) {
 	g.Go(func() error {
 		c, err := retry(func() (*ton.BlockchainConfig, error) {
 			model.CountRPC(ctx)
-			params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
+			params, err := roundPinned.GetConfigParams(ctx, 0, []uint32{34})
 			if err != nil {
 				return nil, fmt.Errorf("GetConfigParams: %w", err)
 			}
@@ -58,7 +60,7 @@ func fetchRoundData(ctx context.Context, pinned LiteClient) (roundData, error) {
 
 	// Pool addresses and true stakes.
 	g.Go(func() error {
-		p, err := getAllPoolAddresses(ctx, pinned, electorAddr)
+		p, err := getAllPoolAddresses(ctx, roundPinned, electorAddr)
 		if err != nil {
 			log.Printf("warning: pool addresses: %v", err)
 		}
@@ -68,7 +70,7 @@ func fetchRoundData(ctx context.Context, pinned LiteClient) (roundData, error) {
 
 	// Past elections → bonuses and total_stake.
 	g.Go(func() error {
-		parsed, err := fetchRawPastElections(ctx, pinned, electorAddr)
+		parsed, err := fetchRawPastElections(ctx, electionsPinned, electorAddr)
 		if err != nil {
 			log.Printf("warning: past elections: %v", err)
 			return nil
