@@ -76,7 +76,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 
 	// Config, pools, and current elections.
 	fetchGroup.Go(func() error {
-		r, err := fetchRoundData(ctx, pinned)
+		r, err := fetchRoundData(ctx, pinned, pinned)
 		if err != nil {
 			return err
 		}

@@ -130,16 +130,24 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		return nil, fmt.Errorf("lookupMasterchainBlockByUtime(until=%d): %w", until, err)
 	}
 	endBlock := endExt.Seqno - 1 // end_block is the last block of this round
+	nextRoundFirstBlock := endExt.Seqno
 
-	// Pin to end_block + 1 and fetch data in parallel.
-	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, endExt.Seqno)
+	// Pin to end_block for current round data (config param 34, pools).
+	currentRoundExt, _, err := lookupMasterchainBlock(ctx, client, endBlock)
 	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlock(end+1=%d): %w", endExt.Seqno, err)
+		return nil, fmt.Errorf("lookupMasterchainBlock(end=%d): %w", endBlock, err)
 	}
-	pinned := client.WithBlock(pinnedExt)
+	currentPinned := client.WithBlock(currentRoundExt)
 
-	// fetchRoundData: parallel fetches for config, pools, and past elections at end_block+1.
-	rd, err := fetchRoundData(ctx, pinned)
+	// Pin to end_block + 1 for past elections (available only after round ends).
+	nextRoundExt, _, err := lookupMasterchainBlock(ctx, client, nextRoundFirstBlock)
+	if err != nil {
+		return nil, fmt.Errorf("lookupMasterchainBlock(nextRoundFirstBlock=%d): %w", nextRoundFirstBlock, err)
+	}
+	nextRoundPinned := client.WithBlock(nextRoundExt)
+
+	// fetchRoundData: config and pools from current round, elections from end_block+1.
+	rd, err := fetchRoundData(ctx, currentPinned, nextRoundPinned)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +155,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	// Build validator rows.
 	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no validators found in config param 34 at block %d", pinnedExt.Seqno)
+		return nil, fmt.Errorf("no validators found in config param 34 at block %d", currentRoundExt.Seqno)
 	}
 
 	if totalTrueStake.Sign() == 0 {
@@ -163,7 +171,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	bonuses := el.Bonuses
 	electionTotalStake := el.TotalStake
 
-	validatorRewards := computeValidatorRewards(ctx, pinned, rows, totalTrueStake, bonuses)
+	validatorRewards := computeValidatorRewards(ctx, nextRoundPinned, rows, totalTrueStake, bonuses)
 
 	out := &model.RoundRewardsOutput{
 		ElectionID:   electionID,
