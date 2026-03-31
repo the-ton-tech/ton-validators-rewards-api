@@ -206,7 +206,12 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 	}
 	rewardRows := make([]rewardRow, len(rows))
 	for i, row := range rows {
-		reward := utils.MulDiv(rewardPool, row.trueStake, totalTrueStake)
+		var reward *big.Int
+		if totalTrueStake.Sign() > 0 {
+			reward = utils.MulDiv(rewardPool, row.trueStake, totalTrueStake)
+		} else {
+			reward = new(big.Int)
+		}
 		rewardRows[i] = rewardRow{validatorRow: row, reward: reward}
 	}
 	sort.Slice(rewardRows, func(i, j int) bool { return rewardRows[i].trueStake.Cmp(rewardRows[j].trueStake) > 0 })
