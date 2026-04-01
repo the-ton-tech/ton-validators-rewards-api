@@ -109,7 +109,7 @@ func TestFetchPerBlockRewardsMatchesSnapshots(t *testing.T) {
 			}
 
 			// Index service output by pubkey for O(1) lookup.
-			outByPubkey := make(map[string]*big.Int, len(out.Validators))
+			outByPubkey := make(map[string]*model.NTon, len(out.Validators))
 			for i := range out.Validators {
 				v := &out.Validators[i]
 				outByPubkey[v.Pubkey] = v.EffectiveStake
