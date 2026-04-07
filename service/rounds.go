@@ -35,7 +35,7 @@ func roundFetchErr(err error) string {
 	return err.Error()
 }
 
-func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64) (*ton.BlockIDExt, error) {
+func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, election_id *int64, unixtime *uint32) (*ton.BlockIDExt, error) {
 	var anchorExt ton.BlockIDExt
 	switch {
 	case block_seqno != nil:
@@ -49,6 +49,13 @@ func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, e
 		ext, err := lookupMasterchainBlockByUtime(ctx, client, uint32(*election_id))
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(election_id=%d): %w", *election_id, err)
+		}
+		anchorExt = ext
+
+	case unixtime != nil:
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, *unixtime)
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(unixtime=%d): %w", *unixtime, err)
 		}
 		anchorExt = ext
 	}
@@ -100,7 +107,7 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool) (*model.RoundRewardsOutput, error) {
 	client := s.currentClient()
 
-	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
+	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID, query.Unixtime)
 	if err != nil || anchor == nil {
 		return nil, fmt.Errorf("getAnchorExt error or nil: %w", err)
 	}
@@ -201,7 +208,7 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 	case query.Block != nil:
 		fallthrough
 	case query.ElectionID != nil:
-		anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
+		anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID, query.Unixtime)
 		if err != nil || anchor == nil {
 			return nil, fmt.Errorf("getAnchorExt error or nil: %w", err)
 		}

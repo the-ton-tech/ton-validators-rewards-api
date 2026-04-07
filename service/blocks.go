@@ -14,10 +14,10 @@ import (
 )
 
 // FetchPerBlockRewards fetches validator statistics for the given seqno (or latest if nil).
-func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, shallow bool) (*model.Output, error) {
+func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool) (*model.Output, error) {
 	client := s.currentClient()
 
-	// Resolve the target block: use provided seqno or fall back to latest.
+	// Resolve the target block: use provided seqno, unixtime, or fall back to latest.
 	var blockIDExt ton.BlockIDExt
 	var blockTime time.Time
 
@@ -30,6 +30,13 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, shall
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock: %w", err)
 		}
+	} else if unixtime != nil {
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, *unixtime)
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(%d): %w", *unixtime, err)
+		}
+		blockIDExt = ext
+		needBlockTime = true
 	} else {
 		info, err := retry(func() (ton.BlockIDExt, error) {
 			model.CountRPC(ctx)

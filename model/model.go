@@ -55,12 +55,14 @@ type ValidationRoundsOutput struct {
 type RoundsQuery struct {
 	ElectionID *int64
 	Block      *uint32
+	Unixtime   *uint32
 }
 
 // RoundRewardsQuery holds query parameters for the round-rewards endpoint.
 type RoundRewardsQuery struct {
 	Block      *uint32
 	ElectionID *int64
+	Unixtime   *uint32
 }
 
 // RoundRewardsOutput is the response for the round-rewards endpoint.
