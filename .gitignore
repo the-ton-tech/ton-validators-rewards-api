@@ -18,3 +18,8 @@ archival-config.json
 __debug_bin*
 cmd/roundcheck/round.json
 cmd/roundcheck/block.json
+paramcheck
+plan.md
+cmd/paramcheck/main.go
+cmd/paramcheck/paramcheck_1774210824.json
+cmd/paramcheck/paramcheck.log

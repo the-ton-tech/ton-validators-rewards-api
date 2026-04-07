@@ -1,14 +1,8 @@
 package model
 
 import (
-	"math/big"
 	"time"
 )
-
-// NewBigInt creates a *big.Int from a uint64 value.
-func NewBigInt(v uint64) *big.Int {
-	return new(big.Int).SetUint64(v)
-}
 
 // JSON output types.
 
@@ -19,11 +13,11 @@ type Output struct {
 	ElectionID            int64             `json:"election_id"`
 	PrevElectionID        *int64            `json:"prev_election_id,omitempty"`
 	NextElectionID        *int64            `json:"next_election_id,omitempty"`
-	ElectorBalance        *big.Int          `json:"elector_balance"`
-	TotalStake            *big.Int          `json:"total_stake"`
-	RewardPerBlock        *big.Int          `json:"reward_per_block"`
-	PrevBlockTotalBonuses *big.Int          `json:"prev_block_total_bonuses"`
-	CurrBlockTotalBonuses *big.Int          `json:"curr_block_total_bonuses"`
+	ElectorBalance        *NTon             `json:"elector_balance"`
+	TotalStake            *NTon             `json:"total_stake"`
+	RewardPerBlock        *NTon             `json:"reward_per_block"`
+	PrevBlockTotalBonuses *NTon             `json:"prev_block_total_bonuses"`
+	CurrBlockTotalBonuses *NTon             `json:"curr_block_total_bonuses"`
 	Validators            []ValidatorReward `json:"validators"`
 }
 
@@ -79,8 +73,8 @@ type RoundRewardsOutput struct {
 	RoundEnd       string            `json:"round_end"`
 	StartBlock     uint32            `json:"start_block"`
 	EndBlock       uint32            `json:"end_block"`
-	TotalBonuses   *big.Int          `json:"total_bonuses"`
-	TotalStake     *big.Int          `json:"total_stake"`
+	TotalBonuses   *NTon             `json:"total_bonuses"`
+	TotalStake     *NTon             `json:"total_stake"`
 	Validators     []ValidatorReward `json:"validators"`
 	Error          string            `json:"error,omitempty"`
 }
@@ -89,16 +83,16 @@ type RoundRewardsOutput struct {
 type ValidatorReward struct {
 	Rank                 int               `json:"rank"`
 	Pubkey               string            `json:"pubkey"`
-	EffectiveStake       *big.Int          `json:"effective_stake"`
+	EffectiveStake       *NTon             `json:"effective_stake"`
 	Weight               float64           `json:"weight"`
-	Reward               *big.Int          `json:"reward"`
+	Reward               *NTon             `json:"reward"`
 	Pool                 string            `json:"pool,omitempty"`
 	OwnerAddress         string            `json:"owner_address,omitempty"`
 	ValidatorAddress     string            `json:"validator_address,omitempty"`
 	PoolType             string            `json:"pool_type,omitempty"`
-	ValidatorStake       *big.Int          `json:"validator_stake,omitempty"`
-	NominatorsStake      *big.Int          `json:"nominators_stake,omitempty"`
-	TotalStake           *big.Int          `json:"total_stake,omitempty"`
+	ValidatorStake       *NTon             `json:"validator_stake,omitempty"`
+	NominatorsStake      *NTon             `json:"nominators_stake,omitempty"`
+	TotalStake           *NTon             `json:"total_stake,omitempty"`
 	ValidatorRewardShare float64           `json:"validator_reward_share,omitempty"`
 	NominatorsCount      uint32            `json:"nominators_count,omitempty"`
 	Nominators           []NominatorReward `json:"nominators,omitempty"`
@@ -106,9 +100,9 @@ type ValidatorReward struct {
 
 // NominatorReward holds per-nominator reward data for a finished round.
 type NominatorReward struct {
-	Address        string   `json:"address"`
-	Weight         float64  `json:"weight"`
-	Reward         *big.Int `json:"reward"`
-	EffectiveStake *big.Int `json:"effective_stake"`
-	Stake          *big.Int `json:"stake"`
+	Address        string  `json:"address"`
+	Weight         float64 `json:"weight"`
+	Reward         *NTon   `json:"reward"`
+	EffectiveStake *NTon   `json:"effective_stake"`
+	Stake          *NTon   `json:"stake"`
 }

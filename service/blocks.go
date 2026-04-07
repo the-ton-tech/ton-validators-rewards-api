@@ -78,7 +78,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 
 	// Config, pools, and current elections.
 	fetchGroup.Go(func() error {
-		r, err := fetchRoundData(ctx, pinned)
+		r, err := fetchRoundData(ctx, pinned, pinned)
 		if err != nil {
 			return err
 		}
@@ -167,10 +167,10 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
 		ElectionID:            int64(roundSince),
-		ElectorBalance:        electorBalance,
-		RewardPerBlock:        rewardPerBlock,
-		PrevBlockTotalBonuses: prevBlockBonuses,
-		CurrBlockTotalBonuses: currBlockBonuses,
+		PrevBlockTotalBonuses: &model.NTon{Int: prevBlockBonuses},
+		CurrBlockTotalBonuses: &model.NTon{Int: currBlockBonuses},
+		ElectorBalance:        &model.NTon{Int: electorBalance},
+		RewardPerBlock:        &model.NTon{Int: rewardPerBlock},
 	}
 	if roundStartBlock > 0 {
 		out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
@@ -189,7 +189,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 	// Build validator rows.
 	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
 	log.Printf("active validators: %d", len(rows))
-	out.TotalStake = totalTrueStake
+	out.TotalStake = &model.NTon{Int: totalTrueStake}
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
 	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock)
