@@ -97,7 +97,7 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 
 // FetchRoundRewards computes per-validator and per-nominator reward distribution
 // for a finished validation round using the elector's bonuses value.
-func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery) (*model.RoundRewardsOutput, error) {
+func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool) (*model.RoundRewardsOutput, error) {
 	client := s.currentClient()
 
 	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID)
@@ -171,7 +171,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	bonuses := el.Bonuses
 	electionTotalStake := el.TotalStake
 
-	validatorRewards := computeValidatorRewards(ctx, nextRoundPinned, rows, totalTrueStake, bonuses)
+	validatorRewards := computeValidatorRewards(ctx, nextRoundPinned, rows, totalTrueStake, bonuses, shallow)
 
 	out := &model.RoundRewardsOutput{
 		ElectionID:   electionID,

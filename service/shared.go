@@ -199,7 +199,7 @@ func findElection(elections []RawPastElection, electAt int64) *RawPastElection {
 // computeValidatorRewards computes per-validator rewards, sorts by stake, and
 // enriches each validator with pool data and nominator reward splits in parallel.
 // rewardPool is the total reward to distribute (bonuses for round rewards, rewardPerBlock for per-block).
-func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int) []model.ValidatorReward {
+func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int, shallow bool) []model.ValidatorReward {
 	type rewardRow struct {
 		validatorRow
 		reward *big.Int
@@ -230,7 +230,7 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 				Pool:           row.pool,
 			}
 
-			if row.poolAddr == nil {
+			if shallow || row.poolAddr == nil {
 				return nil
 			}
 

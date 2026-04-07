@@ -103,6 +103,18 @@ paths:
           schema:
             type: integer
             format: uint32
+        - name: shallow
+          in: query
+          description: >
+            Set to `1` to return only basic validator info (rank, pubkey,
+            effective_stake, weight, reward, pool). Skips pool type detection,
+            owner/validator addresses, nominator data, and returned-stake
+            lookup — significantly faster.
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
       responses:
         "200":
           description: Successful response
@@ -138,6 +150,18 @@ paths:
           schema:
             type: integer
             format: uint32
+        - name: shallow
+          in: query
+          description: >
+            Set to `1` to return only basic validator info (rank, pubkey,
+            effective_stake, weight, reward, pool). Skips pool type detection,
+            owner/validator addresses, nominator data, and returned-stake
+            lookup — significantly faster.
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
       responses:
         "200":
           description: Successful response

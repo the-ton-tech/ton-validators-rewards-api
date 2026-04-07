@@ -96,6 +96,7 @@ Query parameters:
 |---------------|-------|------------------------------------------------------------------|
 | `election_id` | int64 | Election ID of the finished round                                |
 | `block`       | uint32| Masterchain block seqno within the finished round                |
+| `shallow`     | flag  | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
 
 `election_id` and `block` are mutually exclusive. At least one is required.
 
@@ -150,6 +151,7 @@ Query parameters:
 | Parameter    | Type   | Description                                      |
 |--------------|--------|--------------------------------------------------|
 | `seqno`      | uint32 | Masterchain block seqno (defaults to latest)     |
+| `shallow`    | flag   | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
 
 Response:
 
