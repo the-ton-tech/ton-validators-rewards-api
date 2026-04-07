@@ -67,8 +67,28 @@ func fetchPrevElectionIDForBlock(ctx context.Context, client LiteClient, startBl
 	if startBlock <= 1 {
 		return nil
 	}
-	prevBlock := startBlock - 1
-	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, prevBlock)
+	currentElectionID := getElectionIDForBlock(ctx, client, startBlock)
+	if currentElectionID == nil {
+		return nil
+	}
+	maxIterations := 1000
+	for i := 0; i < maxIterations; i++ {
+		startBlock = startBlock - 1
+		prevElectionID := getElectionIDForBlock(ctx, client, startBlock)
+		if prevElectionID == nil {
+			return nil
+		}
+		if *prevElectionID == *currentElectionID {
+			continue
+		}
+
+		return prevElectionID
+	}
+	return nil
+}
+
+func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32) *int64 {
+	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, block)
 	if err != nil {
 		return nil
 	}
