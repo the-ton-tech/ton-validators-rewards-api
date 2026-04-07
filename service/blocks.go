@@ -58,6 +58,8 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 		electorBalance    = new(big.Int)
 		rewardPerBlock    = new(big.Int)
 		previousElections []RawPastElection
+		prevBlockBonuses  = new(big.Int)
+		currBlockBonuses  = new(big.Int)
 	)
 
 	// fetchGroup: parallel fetches for round data, elector balance, and previous block elections.
@@ -131,6 +133,8 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 	if cur := findElection(rd.elections, electionID); cur != nil && cur.Bonuses != nil {
 		if prev := findElection(previousElections, electionID); prev != nil && prev.Bonuses != nil {
 			rewardPerBlock.Sub(cur.Bonuses, prev.Bonuses)
+			prevBlockBonuses.Set(prev.Bonuses)
+			currBlockBonuses.Set(cur.Bonuses)
 		}
 	}
 
@@ -162,9 +166,11 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 			Seqno: blockIDExt.Seqno,
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
-		ElectionID:     int64(roundSince),
-		ElectorBalance: electorBalance,
-		RewardPerBlock: rewardPerBlock,
+		ElectionID:            int64(roundSince),
+		ElectorBalance:        electorBalance,
+		RewardPerBlock:        rewardPerBlock,
+		PrevBlockTotalBonuses: prevBlockBonuses,
+		CurrBlockTotalBonuses: currBlockBonuses,
 	}
 	if roundStartBlock > 0 {
 		out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)

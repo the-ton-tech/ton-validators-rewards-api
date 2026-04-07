@@ -13,16 +13,18 @@ func NewBigInt(v uint64) *big.Int {
 // JSON output types.
 
 type Output struct {
-	ResponseTimeMs  int64            `json:"response_time_ms"`
-	Block           BlockInfo        `json:"block"`
-	ValidationRound RoundInfo        `json:"validation_round"`
-	ElectionID      int64            `json:"election_id"`
-	PrevElectionID  *int64           `json:"prev_election_id,omitempty"`
-	NextElectionID  *int64           `json:"next_election_id,omitempty"`
-	ElectorBalance  *big.Int         `json:"elector_balance"`
-	TotalStake      *big.Int         `json:"total_stake"`
-	RewardPerBlock  *big.Int         `json:"reward_per_block"`
-	Validators      []ValidatorReward `json:"validators"`
+	ResponseTimeMs        int64             `json:"response_time_ms"`
+	Block                 BlockInfo         `json:"block"`
+	ValidationRound       RoundInfo         `json:"validation_round"`
+	ElectionID            int64             `json:"election_id"`
+	PrevElectionID        *int64            `json:"prev_election_id,omitempty"`
+	NextElectionID        *int64            `json:"next_election_id,omitempty"`
+	ElectorBalance        *big.Int          `json:"elector_balance"`
+	TotalStake            *big.Int          `json:"total_stake"`
+	RewardPerBlock        *big.Int          `json:"reward_per_block"`
+	PrevBlockTotalBonuses *big.Int          `json:"prev_block_total_bonuses"`
+	CurrBlockTotalBonuses *big.Int          `json:"curr_block_total_bonuses"`
+	Validators            []ValidatorReward `json:"validators"`
 }
 
 type BlockInfo struct {
@@ -36,7 +38,6 @@ type RoundInfo struct {
 	StartBlock uint32 `json:"start_block"`
 	EndBlock   uint32 `json:"end_block,omitempty"`
 }
-
 
 type ValidationRound struct {
 	ElectionID     int64     `json:"election_id"`
@@ -111,4 +112,3 @@ type NominatorReward struct {
 	EffectiveStake *big.Int `json:"effective_stake"`
 	Stake          *big.Int `json:"stake"`
 }
-
