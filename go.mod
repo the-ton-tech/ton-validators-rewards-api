@@ -3,6 +3,8 @@ module github.com/the-ton-tech/ton-validators-rewards-api
 go 1.25.0
 
 require (
+	github.com/graph-gophers/dataloader/v7 v7.1.3
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
 	github.com/tonkeeper/tongo v1.17.0
 	github.com/uptrace/uptrace-go v1.40.0
@@ -19,7 +21,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/graph-gophers/dataloader/v7 v7.1.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/oasisprotocol/curve25519-voi v0.0.0-20220328075252-7dd334e3daae // indirect
 	github.com/snksoft/crc v1.1.0 // indirect

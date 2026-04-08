@@ -12,7 +12,42 @@ import (
 	"github.com/tonkeeper/tongo/ton"
 
 	"github.com/the-ton-tech/ton-validators-rewards-api/model"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
+
+// Cache implements the dataloader.Cache interface
+type cache[K comparable, V any] struct {
+	*lru.Cache[K, V]
+}
+
+// Get gets an item from the cache
+func (c *cache[K, V]) Get(_ context.Context, key K) (V, bool) {
+	v, ok := c.Cache.Get(key)
+	if ok {
+		return v, ok
+	}
+	return v, ok
+}
+
+// Set sets an item in the cache
+func (c *cache[K, V]) Set(_ context.Context, key K, value V) {
+	c.Cache.Add(key, value)
+}
+
+// Delete deletes an item in the cache
+func (c *cache[K, V]) Delete(_ context.Context, key K) bool {
+	if c.Cache.Contains(key) {
+		c.Cache.Remove(key)
+		return true
+	}
+	return false
+}
+
+// Clear clears the cache
+func (c *cache[K, V]) Clear() {
+	c.Cache.Purge()
+}
 
 type loadersKey struct{}
 
@@ -62,6 +97,24 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 	if globalLoaders != nil {
 		return context.WithValue(ctx, loadersKey{}, globalLoaders)
 	}
+
+	blockSeqnoLru, err := lru.New[uint32, dataloader.Thunk[ton.BlockIDExt]](1000)
+	if err != nil {
+		panic(err)
+	}
+	blockSeqnoCache := &cache[uint32, dataloader.Thunk[ton.BlockIDExt]]{Cache: blockSeqnoLru}
+
+	blockUtimeLru, err := lru.New[uint32, dataloader.Thunk[blockResult]](1000)
+	if err != nil {
+		panic(err)
+	}
+	blockUtimeCache := &cache[uint32, dataloader.Thunk[blockResult]]{Cache: blockUtimeLru}
+
+	configParamsLru, err := lru.New[configParamsKey, dataloader.Thunk[tlb.ConfigParams]](1000)
+	if err != nil {
+		panic(err)
+	}
+	configParamsCache := &cache[configParamsKey, dataloader.Thunk[tlb.ConfigParams]]{Cache: configParamsLru}
 
 	utimeBatch := func(ctx context.Context, keys []uint32) []*dataloader.Result[ton.BlockIDExt] {
 		results := make([]*dataloader.Result[ton.BlockIDExt], len(keys))
@@ -127,9 +180,15 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 	}
 
 	l := &loaders{
-		blockByUtime: dataloader.NewBatchedLoader(utimeBatch, dataloader.WithInputCapacity[uint32, ton.BlockIDExt](1)),
-		blockBySeqno: dataloader.NewBatchedLoader(seqnoBatch, dataloader.WithInputCapacity[uint32, blockResult](1)),
-		configArgs:   make(map[configParamsKey]configParamsArgs),
+		blockByUtime: dataloader.NewBatchedLoader(utimeBatch,
+			dataloader.WithInputCapacity[uint32, ton.BlockIDExt](1),
+			dataloader.WithCache(blockSeqnoCache),
+		),
+		blockBySeqno: dataloader.NewBatchedLoader(seqnoBatch,
+			dataloader.WithInputCapacity[uint32, blockResult](1),
+			dataloader.WithCache(blockUtimeCache),
+		),
+		configArgs: make(map[configParamsKey]configParamsArgs),
 	}
 
 	configBatch := func(ctx context.Context, keys []configParamsKey) []*dataloader.Result[tlb.ConfigParams] {
@@ -157,7 +216,11 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 		wg.Wait()
 		return results
 	}
-	l.configParams = dataloader.NewBatchedLoader(configBatch, dataloader.WithInputCapacity[configParamsKey, tlb.ConfigParams](1))
+	l.configParams = dataloader.NewBatchedLoader(
+		configBatch,
+		dataloader.WithInputCapacity[configParamsKey, tlb.ConfigParams](1),
+		dataloader.WithCache(configParamsCache),
+	)
 	globalLoaders = l
 	return context.WithValue(ctx, loadersKey{}, l)
 }
