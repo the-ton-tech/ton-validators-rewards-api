@@ -65,81 +65,99 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 
 	utimeBatch := func(ctx context.Context, keys []uint32) []*dataloader.Result[ton.BlockIDExt] {
 		results := make([]*dataloader.Result[ton.BlockIDExt], len(keys))
+		var wg sync.WaitGroup
+		wg.Add(len(keys))
 		for i, utime := range keys {
-			blockID := ton.BlockID{
-				Workchain: -1,
-				Shard:     0x8000000000000000,
-			}
-			innerCtx, _ := WithRetryExclude(ctx)
-			ext, err := retryWithExclude(innerCtx, func() (ton.BlockIDExt, error) {
-				model.CountRPC(ctx)
-				ext, _, err := client.LookupBlock(ctx, blockID, 4, nil, &utime)
-				if err != nil {
-					return ton.BlockIDExt{}, err
+			go func() {
+				defer wg.Done()
+				blockID := ton.BlockID{
+					Workchain: -1,
+					Shard:     0x8000000000000000,
 				}
-				return ext, nil
-			})
-			if err != nil {
-				results[i] = &dataloader.Result[ton.BlockIDExt]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlockByUtime(%d): %w", utime, err))}
-			} else {
-				results[i] = &dataloader.Result[ton.BlockIDExt]{Data: ext}
-			}
+				innerCtx, _ := WithRetryExclude(ctx)
+				ext, err := retryWithExclude(innerCtx, func() (ton.BlockIDExt, error) {
+					model.CountRPC(ctx)
+					ext, _, err := client.LookupBlock(ctx, blockID, 4, nil, &utime)
+					if err != nil {
+						return ton.BlockIDExt{}, err
+					}
+					return ext, nil
+				})
+				if err != nil {
+					results[i] = &dataloader.Result[ton.BlockIDExt]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlockByUtime(%d): %w", utime, err))}
+				} else {
+					results[i] = &dataloader.Result[ton.BlockIDExt]{Data: ext}
+				}
+			}()
 		}
+		wg.Wait()
 		return results
 	}
 
 	seqnoBatch := func(ctx context.Context, keys []uint32) []*dataloader.Result[blockResult] {
 		results := make([]*dataloader.Result[blockResult], len(keys))
+		var wg sync.WaitGroup
+		wg.Add(len(keys))
 		for i, seqno := range keys {
-			blockID := ton.BlockID{
-				Workchain: -1,
-				Shard:     0x8000000000000000,
-				Seqno:     seqno,
-			}
-			innerCtx, _ := WithRetryExclude(ctx)
-			r, err := retryWithExclude(innerCtx, func() (blockResult, error) {
-				model.CountRPC(ctx)
-				ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
-				if err != nil {
-					return blockResult{}, err
+			go func() {
+				defer wg.Done()
+				blockID := ton.BlockID{
+					Workchain: -1,
+					Shard:     0x8000000000000000,
+					Seqno:     seqno,
 				}
-				return blockResult{ext, time.Unix(int64(info.GenUtime), 0)}, nil
-			})
-			if err != nil {
-				results[i] = &dataloader.Result[blockResult]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%d): %w", seqno, err))}
-			} else {
-				results[i] = &dataloader.Result[blockResult]{Data: r}
-			}
+				innerCtx, _ := WithRetryExclude(ctx)
+				r, err := retryWithExclude(innerCtx, func() (blockResult, error) {
+					model.CountRPC(ctx)
+					ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
+					if err != nil {
+						return blockResult{}, err
+					}
+					return blockResult{ext, time.Unix(int64(info.GenUtime), 0)}, nil
+				})
+				if err != nil {
+					results[i] = &dataloader.Result[blockResult]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%d): %w", seqno, err))}
+				} else {
+					results[i] = &dataloader.Result[blockResult]{Data: r}
+				}
+			}()
 		}
+		wg.Wait()
 		return results
 	}
 
 	l := &loaders{
-		blockByUtime: dataloader.NewBatchedLoader(utimeBatch),
-		blockBySeqno: dataloader.NewBatchedLoader(seqnoBatch),
+		blockByUtime: dataloader.NewBatchedLoader(utimeBatch, dataloader.WithInputCapacity[uint32, ton.BlockIDExt](1)),
+		blockBySeqno: dataloader.NewBatchedLoader(seqnoBatch, dataloader.WithInputCapacity[uint32, blockResult](1)),
 		configArgs:   make(map[configParamsKey]configParamsArgs),
 	}
 
 	configBatch := func(ctx context.Context, keys []configParamsKey) []*dataloader.Result[tlb.ConfigParams] {
 		results := make([]*dataloader.Result[tlb.ConfigParams], len(keys))
+		var wg sync.WaitGroup
+		wg.Add(len(keys))
 		for i, key := range keys {
-			l.configArgsMu.Lock()
-			args := l.configArgs[key]
-			l.configArgsMu.Unlock()
+			go func() {
+				defer wg.Done()
+				l.configArgsMu.Lock()
+				args := l.configArgs[key]
+				l.configArgsMu.Unlock()
 
-			params, err := retry(func() (tlb.ConfigParams, error) {
-				model.CountRPC(ctx)
-				return args.pinnedClient.GetConfigParams(ctx, key.mode, args.paramList)
-			})
-			if err != nil {
-				results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s): %w", key.seqno, key.params, err))}
-			} else {
-				results[i] = &dataloader.Result[tlb.ConfigParams]{Data: params}
-			}
+				params, err := retry(func() (tlb.ConfigParams, error) {
+					model.CountRPC(ctx)
+					return args.pinnedClient.GetConfigParams(ctx, key.mode, args.paramList)
+				})
+				if err != nil {
+					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s): %w", key.seqno, key.params, err))}
+				} else {
+					results[i] = &dataloader.Result[tlb.ConfigParams]{Data: params}
+				}
+			}()
 		}
+		wg.Wait()
 		return results
 	}
-	l.configParams = dataloader.NewBatchedLoader(configBatch)
+	l.configParams = dataloader.NewBatchedLoader(configBatch, dataloader.WithInputCapacity[configParamsKey, tlb.ConfigParams](1))
 	globalLoaders = l
 	return context.WithValue(ctx, loadersKey{}, l)
 }

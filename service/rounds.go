@@ -130,6 +130,25 @@ func findElectionBoundary(ctx context.Context, client LiteClient, approxUtime ui
 		return electionBoundary{}, fmt.Errorf("cannot read election ID at block %d", ext.Seqno)
 	}
 
+	s0 := ext.Seqno - 2
+	s1 := ext.Seqno - 1
+	s2 := ext.Seqno
+	s3 := ext.Seqno + 1
+	s4 := ext.Seqno + 2
+
+	lookBlock := func(seqno uint32) {
+		ext, _, err := lookupMasterchainBlock(ctx, client, seqno)
+		if err != nil {
+			return
+		}
+		lookupElectionIDForBlock(ctx, client, ext)
+	}
+	go lookBlock(s0)
+	go lookBlock(s1)
+	go lookBlock(s2)
+	go lookBlock(s3)
+	go lookBlock(s4)
+
 	// Walk outward alternating forward/backward to find where the election ID changes.
 	fwdExt := ext // rightmost block checked with same ID going forward
 	bwdExt := ext // leftmost block checked with same ID going backward
@@ -308,6 +327,15 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 
 	// --- Step 1: Resolve anchor round
 	anchorSince, anchorUntil, err := getConfigParam34(ctx, client, anchorExt)
+
+	// start async calls to findElectionBoundary so we can use the results later
+	go func() {
+		findElectionBoundary(ctx, client, anchorSince)
+	}()
+	go func() {
+		findElectionBoundary(ctx, client, anchorUntil)
+	}()
+
 	if err != nil {
 		walkErr = fmt.Sprintf("stopped after 0 rounds: %v", err)
 		log.Printf("warning: %s", walkErr)
