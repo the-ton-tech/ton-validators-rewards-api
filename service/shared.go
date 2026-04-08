@@ -32,27 +32,21 @@ type roundData struct {
 
 // fetchRoundData fetches config param 34, pool addresses, and past elections in parallel.
 // roundPinned is used for config and pool data (should be pinned within the round).
+// roundSeqno is the seqno of the pinned block (used as dataloader cache key).
 // electionsPinned is used for past elections (may need to be pinned after the round ends).
-func fetchRoundData(ctx context.Context, roundPinned, electionsPinned LiteClient) (roundData, error) {
+func fetchRoundData(ctx context.Context, roundPinned, electionsPinned LiteClient, roundSeqno uint32) (roundData, error) {
 	var rd roundData
 	g := new(errgroup.Group)
 
 	// Config param 34 → validator list.
 	g.Go(func() error {
-		c, err := retry(func() (*ton.BlockchainConfig, error) {
-			model.CountRPC(ctx)
-			params, err := roundPinned.GetConfigParams(ctx, 0, []uint32{34})
-			if err != nil {
-				return nil, fmt.Errorf("GetConfigParams: %w", err)
-			}
-			c, _, err := ton.ConvertBlockchainConfig(params, true)
-			if err != nil {
-				return nil, fmt.Errorf("ConvertBlockchainConfig: %w", err)
-			}
-			return c, nil
-		})
+		params, err := cachedGetConfigParams(ctx, roundPinned, 0, []uint32{34}, roundSeqno)
 		if err != nil {
-			return err
+			return fmt.Errorf("GetConfigParams: %w", err)
+		}
+		c, _, err := ton.ConvertBlockchainConfig(params, true)
+		if err != nil {
+			return fmt.Errorf("ConvertBlockchainConfig: %w", err)
 		}
 		rd.conf = c
 		return nil

@@ -16,6 +16,7 @@ import (
 // FetchPerBlockRewards fetches validator statistics for the given seqno (or latest if nil).
 func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool) (*model.Output, error) {
 	client := s.currentClient()
+	ctx = WithLoaders(ctx, client)
 
 	// Resolve the target block: use provided seqno, unixtime, or fall back to latest.
 	var blockIDExt ton.BlockIDExt
@@ -85,7 +86,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixt
 
 	// Config, pools, and current elections.
 	fetchGroup.Go(func() error {
-		r, err := fetchRoundData(ctx, pinned, pinned)
+		r, err := fetchRoundData(ctx, pinned, pinned, blockIDExt.Seqno)
 		if err != nil {
 			return err
 		}

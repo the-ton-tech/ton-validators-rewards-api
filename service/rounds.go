@@ -88,11 +88,17 @@ func fetchPrevElectionIDForBlock(ctx context.Context, client LiteClient, startBl
 }
 
 func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32) *int64 {
-	pinnedExt, _, err := lookupMasterchainBlock(ctx, client, block)
+	ext, _, err := lookupMasterchainBlock(ctx, client, block)
 	if err != nil {
 		return nil
 	}
-	since, _, err := getConfigParam34(ctx, client, pinnedExt)
+	return lookupElectionIDForBlock(ctx, client, ext)
+}
+
+// lookupElectionIDForBlock reads the election ID from config param 34 at the
+// given block. Returns nil on any error.
+func lookupElectionIDForBlock(ctx context.Context, client LiteClient, ext ton.BlockIDExt) *int64 {
+	since, _, err := getConfigParam34(ctx, client, ext)
 	if err != nil || since == 0 {
 		return nil
 	}
@@ -100,25 +106,72 @@ func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32)
 	return &p
 }
 
+const maxBoundarySearch = 20
+
+// electionBoundary describes two adjacent blocks where the election ID changes.
+type electionBoundary struct {
+	BeforeBlock      ton.BlockIDExt // last block of the earlier election
+	BeforeElectionID int64
+	AfterBlock       ton.BlockIDExt // first block of the later election
+	AfterElectionID  int64
+}
+
+// findElectionBoundary locates where the election ID changes near approxUtime.
+// It alternates one step forward, one step backward to find two adjacent blocks
+// with different election IDs, minimizing RPC calls when the boundary is close.
+func findElectionBoundary(ctx context.Context, client LiteClient, approxUtime uint32) (electionBoundary, error) {
+	ext, err := lookupMasterchainBlockByUtime(ctx, client, approxUtime)
+	if err != nil {
+		return electionBoundary{}, err
+	}
+
+	eid := lookupElectionIDForBlock(ctx, client, ext)
+	if eid == nil {
+		return electionBoundary{}, fmt.Errorf("cannot read election ID at block %d", ext.Seqno)
+	}
+
+	// Walk outward alternating forward/backward to find where the election ID changes.
+	fwdExt := ext // rightmost block checked with same ID going forward
+	bwdExt := ext // leftmost block checked with same ID going backward
+	for i := 0; i < maxBoundarySearch; i++ {
+		// One step forward.
+		nextExt, _, err := lookupMasterchainBlock(ctx, client, fwdExt.Seqno+1)
+		if err == nil {
+			nextEID := lookupElectionIDForBlock(ctx, client, nextExt)
+			if nextEID != nil && *nextEID != *eid {
+				return electionBoundary{fwdExt, *eid, nextExt, *nextEID}, nil
+			}
+			fwdExt = nextExt
+		}
+
+		// One step backward.
+		if bwdExt.Seqno > 0 {
+			prevExt, _, err := lookupMasterchainBlock(ctx, client, bwdExt.Seqno-1)
+			if err == nil {
+				prevEID := lookupElectionIDForBlock(ctx, client, prevExt)
+				if prevEID != nil && *prevEID != *eid {
+					return electionBoundary{prevExt, *prevEID, bwdExt, *eid}, nil
+				}
+				bwdExt = prevExt
+			}
+		}
+	}
+
+	return electionBoundary{}, fmt.Errorf("election boundary not found within %d blocks of utime %d", maxBoundarySearch, approxUtime)
+}
+
 // getConfigParam34 reads config param 34 pinned to the given block and returns since/until.
 func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt) (since, until uint32, err error) {
 	pinned := client.WithBlock(ext)
-	conf, err := retry(func() (*ton.BlockchainConfig, error) {
-		model.CountRPC(ctx)
-		params, err := pinned.GetConfigParams(ctx, 0, []uint32{34})
-		if err != nil {
-			return nil, fmt.Errorf("GetConfigParams: %w", err)
-		}
-		c, _, err := ton.ConvertBlockchainConfig(params, true)
-		if err != nil {
-			return nil, fmt.Errorf("ConvertBlockchainConfig: %w", err)
-		}
-		return c, nil
-	})
+	params, err := cachedGetConfigParams(ctx, pinned, 0, []uint32{34}, ext.Seqno)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("GetConfigParams: %w", err)
 	}
-	since, until = getRoundInfo(conf)
+	c, _, err := ton.ConvertBlockchainConfig(params, true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ConvertBlockchainConfig: %w", err)
+	}
+	since, until = getRoundInfo(c)
 	return since, until, nil
 }
 
@@ -126,6 +179,7 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 // for a finished validation round using the elector's bonuses value.
 func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool) (*model.RoundRewardsOutput, error) {
 	client := s.currentClient()
+	ctx = WithLoaders(ctx, client)
 
 	anchor, err := getAnchorExt(ctx, client, query.Block, query.ElectionID, query.Unixtime)
 	if err != nil || anchor == nil {
@@ -147,34 +201,28 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		return nil, fmt.Errorf("round %d is not finished yet (ends %s)", since, time.Unix(int64(until), 0).UTC().Format(time.RFC3339))
 	}
 
-	// Resolve start_block and end_block.
-	startExt, err := lookupMasterchainBlockByUtime(ctx, client, since)
+	// Start boundary: transition from prev round → this round near since.
+	startBoundary, err := findElectionBoundary(ctx, client, since)
 	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlockByUtime(since=%d): %w", since, err)
+		return nil, fmt.Errorf("findElectionBoundary(since): %w", err)
 	}
-	endExt, err := lookupMasterchainBlockByUtime(ctx, client, until)
-	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlockByUtime(until=%d): %w", until, err)
-	}
-	endBlock := endExt.Seqno - 1 // end_block is the last block of this round
-	nextRoundFirstBlock := endExt.Seqno
 
-	// Pin to end_block for current round data (config param 34, pools).
-	currentRoundExt, _, err := lookupMasterchainBlock(ctx, client, endBlock)
+	// End boundary: transition from this round → next round near until.
+	endBoundary, err := findElectionBoundary(ctx, client, until)
 	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlock(end=%d): %w", endBlock, err)
+		return nil, fmt.Errorf("findElectionBoundary(until): %w", err)
 	}
-	currentPinned := client.WithBlock(currentRoundExt)
 
-	// Pin to end_block + 1 for past elections (available only after round ends).
-	nextRoundExt, _, err := lookupMasterchainBlock(ctx, client, nextRoundFirstBlock)
-	if err != nil {
-		return nil, fmt.Errorf("lookupMasterchainBlock(nextRoundFirstBlock=%d): %w", nextRoundFirstBlock, err)
-	}
-	nextRoundPinned := client.WithBlock(nextRoundExt)
+	electionID := startBoundary.AfterElectionID
+
+	// Pin to last block of this round for config param 34 and pool data.
+	currentPinned := client.WithBlock(endBoundary.BeforeBlock)
+
+	// Pin to first block of next round for past elections (available only after round ends).
+	nextRoundPinned := client.WithBlock(endBoundary.AfterBlock)
 
 	// fetchRoundData: config and pools from current round, elections from end_block+1.
-	rd, err := fetchRoundData(ctx, currentPinned, nextRoundPinned)
+	rd, err := fetchRoundData(ctx, currentPinned, nextRoundPinned, endBoundary.BeforeBlock.Seqno)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +230,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	// Build validator rows.
 	rows, totalTrueStake := buildValidatorRows(rd.conf, rd.pools)
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no validators found in config param 34 at block %d", currentRoundExt.Seqno)
+		return nil, fmt.Errorf("no validators found in config param 34 at block %d", endBoundary.BeforeBlock.Seqno)
 	}
 
 	if totalTrueStake.Sign() == 0 {
@@ -190,7 +238,6 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 	}
 
 	// Find matching election and extract bonuses + total_stake.
-	electionID := int64(since)
 	el := findElection(rd.elections, electionID)
 	if el == nil || el.Bonuses == nil {
 		return nil, fmt.Errorf("election %d not found in past_elections or bonuses not available", electionID)
@@ -204,14 +251,14 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 		ElectionID:   electionID,
 		RoundStart:   time.Unix(int64(since), 0).UTC().Format(time.RFC3339),
 		RoundEnd:     time.Unix(int64(until), 0).UTC().Format(time.RFC3339),
-		StartBlock:   startExt.Seqno,
-		EndBlock:     endBlock,
+		StartBlock:   startBoundary.AfterBlock.Seqno,
+		EndBlock:     endBoundary.BeforeBlock.Seqno,
 		TotalBonuses: &model.NTon{Int: bonuses},
 		TotalStake:   &model.NTon{Int: electionTotalStake},
 		Validators:   validatorRewards,
 	}
-	out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, startExt.Seqno)
-	nextID := int64(until)
+	out.PrevElectionID = &startBoundary.BeforeElectionID //fetchPrevElectionIDForBlock(ctx, client, startBlock)
+	nextID := endBoundary.AfterElectionID                //int64(until)
 	out.NextElectionID = &nextID
 	return out, nil
 }
@@ -221,6 +268,7 @@ func (s *Service) FetchRoundRewards(ctx context.Context, query model.RoundReward
 // remaining rounds and fetches them all in parallel.
 func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQuery) (*model.ValidationRoundsOutput, error) {
 	client := s.currentClient()
+	ctx = WithLoaders(ctx, client)
 
 	// Determine anchor block.
 	var anchorExt ton.BlockIDExt
@@ -287,7 +335,8 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 	var roundLength uint32
 	if anchorUntil > 0 && time.Unix(int64(anchorUntil), 0).Before(now) {
 		anchor.finished = true
-		endExt, err := lookupMasterchainBlockByUtime(ctx, client, anchorUntil)
+		// endExt, err := lookupMasterchainBlockByUtime(ctx, client, anchorUntil)
+		endBoundary, err := findElectionBoundary(ctx, client, anchorUntil)
 		if err != nil {
 			// Use rough estimate for round length.
 			log.Printf("warning: could not resolve anchor end_block: %v", err)
@@ -295,10 +344,9 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 				roundLength = anchorExt.Seqno - startExt.Seqno
 			}
 		} else {
-			// lookupByUtime returns the first block of the next round;
 			// end_block is the last block of this round.
-			anchor.endBlock = endExt.Seqno - 1
-			roundLength = endExt.Seqno - startExt.Seqno
+			anchor.endBlock = endBoundary.BeforeBlock.Seqno
+			roundLength = anchor.endBlock - startExt.Seqno
 		}
 	} else {
 		// Unfinished round — extrapolate full round length from partial data.
@@ -391,13 +439,20 @@ func (s *Service) FetchValidationRounds(ctx context.Context, query model.RoundsQ
 		rounds = rounds[:limit]
 	}
 
-	populatePrevNextElectionIDs(ctx, client, rounds)
+	err = populatePrevNextElectionIDs(ctx, client, rounds)
+	if err != nil {
+		return nil, fmt.Errorf("populatePrevNextElectionIDs: %w", err)
+	}
 	return buildRoundsOutput(rounds, walkErr), nil
 }
 
-func populatePrevNextElectionIDs(ctx context.Context, client LiteClient, rounds []roundInfo) {
+func populatePrevNextElectionIDs(ctx context.Context, client LiteClient, rounds []roundInfo) error {
 	for i := range rounds {
-		rounds[i].prevElectionID = fetchPrevElectionIDForBlock(ctx, client, rounds[i].startBlock)
+		boundary, err := findElectionBoundary(ctx, client, rounds[i].startUtime)
+		if err != nil {
+			return err
+		}
+		rounds[i].prevElectionID = &boundary.BeforeElectionID
 
 		// TODO Are we sure that end utime is always the next election id?
 		if rounds[i].finished && rounds[i].endUtime > 0 {
@@ -405,6 +460,7 @@ func populatePrevNextElectionIDs(ctx context.Context, client LiteClient, rounds 
 			rounds[i].nextElectionID = &n
 		}
 	}
+	return nil
 }
 
 // buildRoundsOutput constructs the final output from collected rounds.

@@ -154,6 +154,9 @@ func (r *RoundRobinClient) WithBlock(block ton.BlockIDExt) LiteClient {
 
 func (r *RoundRobinClient) GetMasterchainInfo(ctx context.Context) (liteclient.LiteServerMasterchainInfoC, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetMasterchainInfo", trace.WithSpanKind(trace.SpanKindClient))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	res, err := r.clientForRequest(ctx).GetMasterchainInfo(ctx)
 	if err != nil {
@@ -164,6 +167,7 @@ func (r *RoundRobinClient) GetMasterchainInfo(ctx context.Context) (liteclient.L
 }
 
 func (r *RoundRobinClient) LookupBlock(ctx context.Context, blockID ton.BlockID, mode uint32, lt *uint64, utime *uint32) (ton.BlockIDExt, tlb.BlockInfo, error) {
+
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.LookupBlock", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.Int64("ton.block.workchain", int64(blockID.Workchain)),
@@ -171,6 +175,15 @@ func (r *RoundRobinClient) LookupBlock(ctx context.Context, blockID ton.BlockID,
 			attribute.Int64("ton.block.seqno", int64(blockID.Seqno)),
 			attribute.Int64("ton.lookup.mode", int64(mode)),
 		))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
+	if utime != nil {
+		span.SetAttributes(attribute.Int64("ton.lookup.utime", int64(*utime)))
+	}
+	if lt != nil {
+		span.SetAttributes(attribute.Int64("ton.lookup.lt", int64(*lt)))
+	}
 	defer span.End()
 	ext, info, err := r.clientForRequest(ctx).LookupBlock(ctx, blockID, mode, lt, utime)
 	if err != nil {
@@ -187,6 +200,9 @@ func (r *RoundRobinClient) GetBlock(ctx context.Context, blockID ton.BlockIDExt)
 			attribute.Int64("ton.block.shard", int64(blockID.Shard)),
 			attribute.Int64("ton.block.seqno", int64(blockID.Seqno)),
 		))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	block, err := r.clientForRequest(ctx).GetBlock(ctx, blockID)
 	if err != nil {
@@ -199,6 +215,9 @@ func (r *RoundRobinClient) GetBlock(ctx context.Context, blockID ton.BlockIDExt)
 func (r *RoundRobinClient) GetAccountState(ctx context.Context, accountID ton.AccountID) (tlb.ShardAccount, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "liteclient.GetAccountState", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("ton.account", accountID.String())))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	state, err := r.clientForRequest(ctx).GetAccountState(ctx, accountID)
 	if err != nil {
@@ -214,6 +233,10 @@ func (r *RoundRobinClient) GetConfigParams(ctx context.Context, mode liteapi.Con
 			attribute.Int("ton.config.mode", int(mode)),
 			attribute.IntSlice("ton.config.params", intSlice(paramList)),
 		))
+
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	params, err := r.clientForRequest(ctx).GetConfigParams(ctx, mode, paramList)
 	if err != nil {
@@ -229,6 +252,9 @@ func (r *RoundRobinClient) RunSmcMethodByID(ctx context.Context, accountID ton.A
 			attribute.String("ton.account", accountID.String()),
 			attribute.Int("ton.method.id", methodID),
 		))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	exitCode, stack, err := r.clientForRequest(ctx).RunSmcMethodByID(ctx, accountID, methodID, params)
 	if err != nil {
@@ -246,6 +272,9 @@ func (r *RoundRobinClient) RunSmcMethod(ctx context.Context, accountID ton.Accou
 			attribute.String("ton.account", accountID.String()),
 			attribute.String("ton.method", method),
 		))
+	if r.targetBlock != nil {
+		span.SetAttributes(attribute.Int64("ton.block.seqno", int64(r.targetBlock.BlockID.Seqno)))
+	}
 	defer span.End()
 	exitCode, stack, err := r.clientForRequest(ctx).RunSmcMethod(ctx, accountID, method, params)
 	if err != nil {
