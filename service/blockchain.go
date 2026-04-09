@@ -40,11 +40,14 @@ type RawPastElection struct {
 	Bonuses    *big.Int         // nil if not available
 }
 
-
 // getRoundInfo returns the unix timestamps of the current validation round start and end.
 // Config param 34 has two TL-B variants: "validators#11" (legacy) and "validators_ext#12"
 // (current, adds TotalWeight). Both carry UtimeSince/UtimeUntil so we handle both.
-func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
+func getRoundInfo(c *ton.BlockchainConfig) (since, until uint32) {
+	if c == nil {
+		return
+	}
+	conf := *c
 	if conf.ConfigParam34 == nil {
 		return
 	}
@@ -59,7 +62,6 @@ func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
 	}
 	return since, until
 }
-
 
 // computeReturnedStake calls the elector's compute_returned_stake(addr) get method.
 // Returns the credits balance for the given address.

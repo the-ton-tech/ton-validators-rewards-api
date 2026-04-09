@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dataloader "github.com/graph-gophers/dataloader/v7"
+	"github.com/tonkeeper/tongo/boc"
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
@@ -81,7 +82,7 @@ func parseParamList(s string) ([]uint32, error) {
 type loaders struct {
 	blockByUtime *dataloader.Loader[uint32, ton.BlockIDExt]
 	blockBySeqno *dataloader.Loader[uint32, blockResult]
-	configParams *dataloader.Loader[configParamsKey, tlb.ConfigParams]
+	configParams *dataloader.Loader[configParamsKey, string]
 }
 
 var loadersMu sync.Mutex
@@ -108,11 +109,11 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 	}
 	blockUtimeCache := &cache[uint32, dataloader.Thunk[blockResult]]{Cache: blockUtimeLru}
 
-	configParamsLru, err := lru.New[configParamsKey, dataloader.Thunk[tlb.ConfigParams]](1000)
+	configParamsLru, err := lru.New[configParamsKey, dataloader.Thunk[string]](1000)
 	if err != nil {
 		panic(err)
 	}
-	configParamsCache := &cache[configParamsKey, dataloader.Thunk[tlb.ConfigParams]]{Cache: configParamsLru}
+	configParamsCache := &cache[configParamsKey, dataloader.Thunk[string]]{Cache: configParamsLru}
 
 	utimeBatch := func(ctx context.Context, keys []uint32) []*dataloader.Result[ton.BlockIDExt] {
 		results := make([]*dataloader.Result[ton.BlockIDExt], len(keys))
@@ -188,35 +189,49 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 		),
 	}
 
-	configBatch := func(ctx context.Context, keys []configParamsKey) []*dataloader.Result[tlb.ConfigParams] {
-		results := make([]*dataloader.Result[tlb.ConfigParams], len(keys))
+	configBatch := func(ctx context.Context, keys []configParamsKey) []*dataloader.Result[string] {
+		results := make([]*dataloader.Result[string], len(keys))
 		var wg sync.WaitGroup
 		wg.Add(len(keys))
 		for i, key := range keys {
 			go func() {
 				defer wg.Done()
-				// Reconstruct pinned client from the cached block lookup.
-				thunk := l.blockBySeqno.Load(ctx, key.seqno)
-				r, err := thunk()
-				if err != nil {
-					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%d): %w", key.seqno, err))}
-					return
-				}
-				pinned := client.WithBlock(r.ext)
 				paramList, err := parseParamList(key.params)
 				if err != nil {
-					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("parseParamList(%q): %w", key.params, err))}
+					results[i] = &dataloader.Result[string]{Error: dataloader.NewSkipCacheError(fmt.Errorf("parseParamList(%q): %w", key.params, err))}
 					return
 				}
+
+				block, _, err := lookupMasterchainBlock(ctx, client, key.seqno)
+				if err != nil {
+					results[i] = &dataloader.Result[string]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%q): %w", key.params, err))}
+					return
+				}
+
+				pinned := client.WithBlock(block)
 
 				params, err := retry(func() (tlb.ConfigParams, error) {
 					model.CountRPC(ctx)
 					return pinned.GetConfigParams(ctx, key.mode, paramList)
 				})
+
 				if err != nil {
-					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s): %w", key.seqno, key.params, err))}
+					results[i] = &dataloader.Result[string]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s): %w", key.seqno, key.params, err))}
 				} else {
-					results[i] = &dataloader.Result[tlb.ConfigParams]{Data: params}
+					cell := boc.NewCell()
+
+					if err := tlb.Marshal(cell, &params); err != nil {
+						results[i] = &dataloader.Result[string]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s) marshal: %w", key.seqno, key.params, err))}
+						return
+					}
+
+					str, err := cell.ToBoc()
+					if err != nil {
+						results[i] = &dataloader.Result[string]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s) to boc: %w", key.seqno, key.params, err))}
+						return
+					}
+
+					results[i] = &dataloader.Result[string]{Data: string(str)}
 				}
 			}()
 		}
@@ -225,7 +240,7 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 	}
 	l.configParams = dataloader.NewBatchedLoader(
 		configBatch,
-		dataloader.WithInputCapacity[configParamsKey, tlb.ConfigParams](1),
+		dataloader.WithInputCapacity[configParamsKey, string](1),
 		dataloader.WithCache(configParamsCache),
 	)
 	globalLoaders = l
@@ -243,7 +258,18 @@ func cachedGetConfigParams(ctx context.Context, pinnedClient LiteClient, mode li
 	if l := getLoaders(ctx); l != nil {
 		key := newConfigParamsKey(mode, paramList, seqno)
 		thunk := l.configParams.Load(ctx, key)
-		return thunk()
+		result, err := thunk()
+
+		cell, err := boc.DeserializeBoc([]byte(result))
+		if err != nil {
+			return tlb.ConfigParams{}, err
+		}
+
+		var copyConfigParams tlb.ConfigParams
+		if err := tlb.Unmarshal(cell[0], &copyConfigParams); err != nil {
+			return tlb.ConfigParams{}, err
+		}
+		return copyConfigParams, err
 	}
 
 	// Fallback: no loader in context.
