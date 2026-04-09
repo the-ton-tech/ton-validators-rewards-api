@@ -192,7 +192,6 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 		return 0, 0, fmt.Errorf("ConvertBlockchainConfig: %w", err)
 	}
 	since, until = getRoundInfo(c)
-	log.Println("getConfigParam34", ext.Seqno, since, until)
 	if since == 0 || until == 0 {
 		return 0, 0, fmt.Errorf("config param 34 is empty at block %d", ext.Seqno)
 	}
