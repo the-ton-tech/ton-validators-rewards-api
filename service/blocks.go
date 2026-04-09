@@ -181,7 +181,11 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixt
 		RewardPerBlock:        &model.NTon{Int: rewardPerBlock},
 	}
 	if roundStartBlock > 0 {
-		out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
+		prevID, err := fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
+		if err != nil {
+			return nil, fmt.Errorf("fetchPrevElectionIDForBlock: %w", err)
+		}
+		out.PrevElectionID = prevID
 	}
 	if roundUntil > 0 && time.Unix(int64(roundUntil), 0).Before(time.Now()) {
 		nextID := int64(roundUntil)

@@ -63,48 +63,56 @@ func getAnchorExt(ctx context.Context, client LiteClient, block_seqno *uint32, e
 }
 
 // fetchPrevElectionIDForBlock returns the election_id of the round containing (startBlock - 1).
-func fetchPrevElectionIDForBlock(ctx context.Context, client LiteClient, startBlock uint32) *int64 {
+func fetchPrevElectionIDForBlock(ctx context.Context, client LiteClient, startBlock uint32) (*int64, error) {
 	if startBlock <= 1 {
-		return nil
+		return nil, fmt.Errorf("startBlock is less than 1")
 	}
-	currentElectionID := getElectionIDForBlock(ctx, client, startBlock)
+	currentElectionID, err := getElectionIDForBlock(ctx, client, startBlock)
+	if err != nil {
+		return nil, err
+	}
 	if currentElectionID == nil {
-		return nil
+		return nil, fmt.Errorf("currentElectionID is nil")
 	}
 	maxIterations := 1000
 	for i := 0; i < maxIterations; i++ {
 		startBlock = startBlock - 1
-		prevElectionID := getElectionIDForBlock(ctx, client, startBlock)
+		prevElectionID, err := getElectionIDForBlock(ctx, client, startBlock)
+		if err != nil {
+			return nil, err
+		}
 		if prevElectionID == nil {
-			return nil
+			return nil, fmt.Errorf("prevElectionID is nil")
 		}
 		if *prevElectionID == *currentElectionID {
 			continue
 		}
 
-		return prevElectionID
+		return prevElectionID, nil
 	}
-	return nil
+	return nil, fmt.Errorf("prevElectionID not found")
 }
 
-func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32) *int64 {
+func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32) (*int64, error) {
 	ext, _, err := lookupMasterchainBlock(ctx, client, block)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	return lookupElectionIDForBlock(ctx, client, ext)
 }
 
 // lookupElectionIDForBlock reads the election ID from config param 34 at the
 // given block. Returns nil on any error.
-func lookupElectionIDForBlock(ctx context.Context, client LiteClient, ext ton.BlockIDExt) *int64 {
+func lookupElectionIDForBlock(ctx context.Context, client LiteClient, ext ton.BlockIDExt) (*int64, error) {
 	since, _, err := getConfigParam34(ctx, client, ext)
-	if err != nil || since == 0 {
-		log.Printf("warning: could not read election ID at block %d: %v", ext.Seqno, err)
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if since == 0 {
+		return nil, fmt.Errorf("config param 34 is empty at block %d", ext.Seqno)
 	}
 	p := int64(since)
-	return &p
+	return &p, nil
 }
 
 const maxBoundarySearch = 20
@@ -126,7 +134,10 @@ func findElectionBoundary(ctx context.Context, client LiteClient, approxUtime ui
 		return electionBoundary{}, err
 	}
 
-	eid := lookupElectionIDForBlock(ctx, client, ext)
+	eid, err := lookupElectionIDForBlock(ctx, client, ext)
+	if err != nil {
+		return electionBoundary{}, err
+	}
 	if eid == nil {
 		return electionBoundary{}, fmt.Errorf("cannot read election ID at block %d", ext.Seqno)
 	}
@@ -157,7 +168,10 @@ func findElectionBoundary(ctx context.Context, client LiteClient, approxUtime ui
 		// One step forward.
 		nextExt, _, err := lookupMasterchainBlock(ctx, client, fwdExt.Seqno+1)
 		if err == nil {
-			nextEID := lookupElectionIDForBlock(ctx, client, nextExt)
+			nextEID, err := lookupElectionIDForBlock(ctx, client, nextExt)
+			if err != nil {
+				return electionBoundary{}, err
+			}
 			if nextEID != nil && *nextEID != *eid {
 				return electionBoundary{fwdExt, *eid, nextExt, *nextEID}, nil
 			}
@@ -168,7 +182,10 @@ func findElectionBoundary(ctx context.Context, client LiteClient, approxUtime ui
 		if bwdExt.Seqno > 0 {
 			prevExt, _, err := lookupMasterchainBlock(ctx, client, bwdExt.Seqno-1)
 			if err == nil {
-				prevEID := lookupElectionIDForBlock(ctx, client, prevExt)
+				prevEID, err := lookupElectionIDForBlock(ctx, client, prevExt)
+				if err != nil {
+					return electionBoundary{}, err
+				}
 				if prevEID != nil && *prevEID != *eid {
 					return electionBoundary{prevExt, *prevEID, bwdExt, *eid}, nil
 				}
@@ -192,6 +209,7 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 		return 0, 0, fmt.Errorf("ConvertBlockchainConfig: %w", err)
 	}
 	since, until = getRoundInfo(c)
+
 	if since == 0 || until == 0 {
 		return 0, 0, fmt.Errorf("config param 34 is empty at block %d", ext.Seqno)
 	}
