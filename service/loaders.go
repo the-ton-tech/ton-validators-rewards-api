@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -65,13 +66,15 @@ type configParamsKey struct {
 }
 
 func newConfigParamsKey(mode liteapi.ConfigMode, paramList []uint32, seqno uint32) configParamsKey {
-	return configParamsKey{mode: mode, params: fmt.Sprint(paramList), seqno: seqno}
+	b, _ := json.Marshal(paramList)
+	return configParamsKey{mode: mode, params: string(b), seqno: seqno}
 }
 
-// configParamsArgs stores the non-comparable arguments needed by the config batch function.
-type configParamsArgs struct {
-	paramList    []uint32
-	pinnedClient LiteClient
+// parseParamList reconstructs []uint32 from the JSON representation (e.g. "[34]" → []uint32{34}).
+func parseParamList(s string) ([]uint32, error) {
+	var result []uint32
+	err := json.Unmarshal([]byte(s), &result)
+	return result, err
 }
 
 // loaders holds per-request dataloaders.
@@ -79,11 +82,6 @@ type loaders struct {
 	blockByUtime *dataloader.Loader[uint32, ton.BlockIDExt]
 	blockBySeqno *dataloader.Loader[uint32, blockResult]
 	configParams *dataloader.Loader[configParamsKey, tlb.ConfigParams]
-
-	// configArgs maps configParamsKey → configParamsArgs so the batch function
-	// can recover the original []uint32 and BlockIDExt from the comparable key.
-	configArgsMu sync.Mutex
-	configArgs   map[configParamsKey]configParamsArgs
 }
 
 var loadersMu sync.Mutex
@@ -188,7 +186,6 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 			dataloader.WithInputCapacity[uint32, blockResult](1),
 			dataloader.WithCache(blockUtimeCache),
 		),
-		configArgs: make(map[configParamsKey]configParamsArgs),
 	}
 
 	configBatch := func(ctx context.Context, keys []configParamsKey) []*dataloader.Result[tlb.ConfigParams] {
@@ -198,13 +195,23 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 		for i, key := range keys {
 			go func() {
 				defer wg.Done()
-				l.configArgsMu.Lock()
-				args := l.configArgs[key]
-				l.configArgsMu.Unlock()
+				// Reconstruct pinned client from the cached block lookup.
+				thunk := l.blockBySeqno.Load(ctx, key.seqno)
+				r, err := thunk()
+				if err != nil {
+					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%d): %w", key.seqno, err))}
+					return
+				}
+				pinned := client.WithBlock(r.ext)
+				paramList, err := parseParamList(key.params)
+				if err != nil {
+					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("parseParamList(%q): %w", key.params, err))}
+					return
+				}
 
 				params, err := retry(func() (tlb.ConfigParams, error) {
 					model.CountRPC(ctx)
-					return args.pinnedClient.GetConfigParams(ctx, key.mode, args.paramList)
+					return pinned.GetConfigParams(ctx, key.mode, paramList)
 				})
 				if err != nil {
 					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("GetConfigParams(%d, %s): %w", key.seqno, key.params, err))}
@@ -231,13 +238,10 @@ func getLoaders(ctx context.Context) *loaders {
 }
 
 // cachedGetConfigParams fetches config params using the dataloader when available.
-// pinnedClient should already be pinned to a block; seqno is used as the cache key.
+// pinnedClient is used as fallback when no loader is in context; seqno is the cache key.
 func cachedGetConfigParams(ctx context.Context, pinnedClient LiteClient, mode liteapi.ConfigMode, paramList []uint32, seqno uint32) (tlb.ConfigParams, error) {
 	if l := getLoaders(ctx); l != nil {
 		key := newConfigParamsKey(mode, paramList, seqno)
-		l.configArgsMu.Lock()
-		l.configArgs[key] = configParamsArgs{paramList: paramList, pinnedClient: pinnedClient}
-		l.configArgsMu.Unlock()
 		thunk := l.configParams.Load(ctx, key)
 		return thunk()
 	}
