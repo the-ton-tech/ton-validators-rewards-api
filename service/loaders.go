@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dataloader "github.com/graph-gophers/dataloader/v7"
+	"github.com/tonkeeper/tongo/boc"
 	"github.com/tonkeeper/tongo/liteapi"
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
@@ -195,19 +196,19 @@ func WithLoaders(ctx context.Context, client LiteClient) context.Context {
 		for i, key := range keys {
 			go func() {
 				defer wg.Done()
-				// Reconstruct pinned client from the cached block lookup.
-				thunk := l.blockBySeqno.Load(ctx, key.seqno)
-				r, err := thunk()
-				if err != nil {
-					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%d): %w", key.seqno, err))}
-					return
-				}
-				pinned := client.WithBlock(r.ext)
 				paramList, err := parseParamList(key.params)
 				if err != nil {
 					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("parseParamList(%q): %w", key.params, err))}
 					return
 				}
+
+				block, _, err := lookupMasterchainBlock(ctx, client, key.seqno)
+				if err != nil {
+					results[i] = &dataloader.Result[tlb.ConfigParams]{Error: dataloader.NewSkipCacheError(fmt.Errorf("lookupMasterchainBlock(%q): %w", key.params, err))}
+					return
+				}
+
+				pinned := client.WithBlock(block)
 
 				params, err := retry(func() (tlb.ConfigParams, error) {
 					model.CountRPC(ctx)
@@ -243,7 +244,19 @@ func cachedGetConfigParams(ctx context.Context, pinnedClient LiteClient, mode li
 	if l := getLoaders(ctx); l != nil {
 		key := newConfigParamsKey(mode, paramList, seqno)
 		thunk := l.configParams.Load(ctx, key)
-		return thunk()
+		result, err := thunk()
+
+		cell := boc.NewCell()
+
+		if err := tlb.Marshal(cell, &result); err != nil {
+			return tlb.ConfigParams{}, err
+		}
+
+		var copyConfigParams tlb.ConfigParams
+		if err := tlb.Unmarshal(cell, &copyConfigParams); err != nil {
+			return tlb.ConfigParams{}, err
+		}
+		return copyConfigParams, err
 	}
 
 	// Fallback: no loader in context.

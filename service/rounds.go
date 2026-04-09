@@ -100,6 +100,7 @@ func getElectionIDForBlock(ctx context.Context, client LiteClient, block uint32)
 func lookupElectionIDForBlock(ctx context.Context, client LiteClient, ext ton.BlockIDExt) *int64 {
 	since, _, err := getConfigParam34(ctx, client, ext)
 	if err != nil || since == 0 {
+		log.Printf("warning: could not read election ID at block %d: %v", ext.Seqno, err)
 		return nil
 	}
 	p := int64(since)
@@ -191,6 +192,10 @@ func getConfigParam34(ctx context.Context, client LiteClient, ext ton.BlockIDExt
 		return 0, 0, fmt.Errorf("ConvertBlockchainConfig: %w", err)
 	}
 	since, until = getRoundInfo(c)
+	log.Println("getConfigParam34", ext.Seqno, since, until)
+	if since == 0 || until == 0 {
+		return 0, 0, fmt.Errorf("config param 34 is empty at block %d", ext.Seqno)
+	}
 	return since, until, nil
 }
 
