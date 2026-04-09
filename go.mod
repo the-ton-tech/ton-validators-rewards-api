@@ -3,6 +3,8 @@ module github.com/the-ton-tech/ton-validators-rewards-api
 go 1.25.0
 
 require (
+	github.com/graph-gophers/dataloader/v7 v7.1.3
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
 	github.com/tonkeeper/tongo v1.17.0
 	github.com/uptrace/uptrace-go v1.40.0

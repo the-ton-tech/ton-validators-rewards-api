@@ -14,10 +14,11 @@ import (
 )
 
 // FetchPerBlockRewards fetches validator statistics for the given seqno (or latest if nil).
-func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*model.Output, error) {
+func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool) (*model.Output, error) {
 	client := s.currentClient()
+	ctx = WithLoaders(ctx, client)
 
-	// Resolve the target block: use provided seqno or fall back to latest.
+	// Resolve the target block: use provided seqno, unixtime, or fall back to latest.
 	var blockIDExt ton.BlockIDExt
 	var blockTime time.Time
 
@@ -30,6 +31,13 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 		if err != nil {
 			return nil, fmt.Errorf("lookupMasterchainBlock: %w", err)
 		}
+	} else if unixtime != nil {
+		ext, err := lookupMasterchainBlockByUtime(ctx, client, *unixtime)
+		if err != nil {
+			return nil, fmt.Errorf("lookupMasterchainBlockByUtime(%d): %w", *unixtime, err)
+		}
+		blockIDExt = ext
+		needBlockTime = true
 	} else {
 		info, err := retry(func() (ton.BlockIDExt, error) {
 			model.CountRPC(ctx)
@@ -58,6 +66,8 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 		electorBalance    = new(big.Int)
 		rewardPerBlock    = new(big.Int)
 		previousElections []RawPastElection
+		prevBlockBonuses  = new(big.Int)
+		currBlockBonuses  = new(big.Int)
 	)
 
 	// fetchGroup: parallel fetches for round data, elector balance, and previous block elections.
@@ -76,7 +86,7 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 
 	// Config, pools, and current elections.
 	fetchGroup.Go(func() error {
-		r, err := fetchRoundData(ctx, pinned, pinned)
+		r, err := fetchRoundData(ctx, pinned, pinned, blockIDExt.Seqno)
 		if err != nil {
 			return err
 		}
@@ -131,6 +141,8 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 	if cur := findElection(rd.elections, electionID); cur != nil && cur.Bonuses != nil {
 		if prev := findElection(previousElections, electionID); prev != nil && prev.Bonuses != nil {
 			rewardPerBlock.Sub(cur.Bonuses, prev.Bonuses)
+			prevBlockBonuses.Set(prev.Bonuses)
+			currBlockBonuses.Set(cur.Bonuses)
 		}
 	}
 
@@ -162,12 +174,18 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 			Seqno: blockIDExt.Seqno,
 			Time:  blockTime.UTC().Format(time.RFC3339),
 		},
-		ElectionID:     int64(roundSince),
-		ElectorBalance: &model.NTon{Int: electorBalance},
-		RewardPerBlock: &model.NTon{Int: rewardPerBlock},
+		ElectionID:            int64(roundSince),
+		PrevBlockTotalBonuses: &model.NTon{Int: prevBlockBonuses},
+		CurrBlockTotalBonuses: &model.NTon{Int: currBlockBonuses},
+		ElectorBalance:        &model.NTon{Int: electorBalance},
+		RewardPerBlock:        &model.NTon{Int: rewardPerBlock},
 	}
 	if roundStartBlock > 0 {
-		out.PrevElectionID = fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
+		prevID, err := fetchPrevElectionIDForBlock(ctx, client, roundStartBlock)
+		if err != nil {
+			return nil, fmt.Errorf("fetchPrevElectionIDForBlock: %w", err)
+		}
+		out.PrevElectionID = prevID
 	}
 	if roundUntil > 0 && time.Unix(int64(roundUntil), 0).Before(time.Now()) {
 		nextID := int64(roundUntil)
@@ -186,6 +204,6 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32) (*mod
 	out.TotalStake = &model.NTon{Int: totalTrueStake}
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
-	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock)
+	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock, shallow)
 	return &out, nil
 }

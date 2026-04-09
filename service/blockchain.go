@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/tonkeeper/tongo/tlb"
 	"github.com/tonkeeper/tongo/ton"
@@ -41,33 +40,14 @@ type RawPastElection struct {
 	Bonuses    *big.Int         // nil if not available
 }
 
-// lookupMasterchainBlock resolves a seqno to a BlockIDExt and returns the block time.
-func lookupMasterchainBlock(ctx context.Context, client LiteClient, seqno uint32) (ton.BlockIDExt, time.Time, error) {
-	blockID := ton.BlockID{
-		Workchain: -1,
-		Shard:     0x8000000000000000,
-		Seqno:     seqno,
-	}
-	type result struct {
-		ext  ton.BlockIDExt
-		time time.Time
-	}
-	ctx, _ = WithRetryExclude(ctx)
-	r, err := retryWithExclude(ctx, func() (result, error) {
-		model.CountRPC(ctx)
-		ext, info, err := client.LookupBlock(ctx, blockID, 1, nil, nil)
-		if err != nil {
-			return result{}, err
-		}
-		return result{ext, time.Unix(int64(info.GenUtime), 0)}, nil
-	})
-	return r.ext, r.time, err
-}
-
 // getRoundInfo returns the unix timestamps of the current validation round start and end.
 // Config param 34 has two TL-B variants: "validators#11" (legacy) and "validators_ext#12"
 // (current, adds TotalWeight). Both carry UtimeSince/UtimeUntil so we handle both.
-func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
+func getRoundInfo(c *ton.BlockchainConfig) (since, until uint32) {
+	if c == nil {
+		return
+	}
+	conf := *c
 	if conf.ConfigParam34 == nil {
 		return
 	}
@@ -81,24 +61,6 @@ func getRoundInfo(conf *ton.BlockchainConfig) (since, until uint32) {
 		until = vs.ValidatorsExt.UtimeUntil
 	}
 	return since, until
-}
-
-// lookupMasterchainBlockByUtime resolves a unix timestamp to the nearest masterchain block.
-func lookupMasterchainBlockByUtime(ctx context.Context, client LiteClient, utime uint32) (ton.BlockIDExt, error) {
-	blockID := ton.BlockID{
-		Workchain: -1,
-		Shard:     0x8000000000000000,
-	}
-	ctx, _ = WithRetryExclude(ctx)
-	ext, err := retryWithExclude(ctx, func() (ton.BlockIDExt, error) {
-		model.CountRPC(ctx)
-		ext, _, err := client.LookupBlock(ctx, blockID, 4, nil, &utime)
-		if err != nil {
-			return ton.BlockIDExt{}, err
-		}
-		return ext, nil
-	})
-	return ext, err
 }
 
 // computeReturnedStake calls the elector's compute_returned_stake(addr) get method.

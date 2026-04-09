@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,11 +48,15 @@ func getCachedConfig(configPath string) (*config.GlobalConfigurationFile, error)
 	var err error
 
 	if configPath != "" {
-		log.Printf("loading config from %s...", configPath)
-		conf, err = loadConfigFromFile(configPath)
+		if strings.HasPrefix(configPath, "http") {
+			conf, err = downloadConfig(&configPath)
+		} else {
+			log.Printf("loading config from %s...", configPath)
+			conf, err = loadConfigFromFile(configPath)
+		}
 	} else {
 		log.Printf("downloading config from %s...", configURL)
-		conf, err = downloadConfig()
+		conf, err = downloadConfig(nil)
 	}
 	if err != nil {
 		return nil, err
@@ -77,8 +82,12 @@ func loadConfigFromFile(path string) (*config.GlobalConfigurationFile, error) {
 	return conf, nil
 }
 
-func downloadConfig() (*config.GlobalConfigurationFile, error) {
-	resp, err := http.Get(configURL) //nolint:noctx
+func downloadConfig(configPath *string) (*config.GlobalConfigurationFile, error) {
+	var url = configURL
+	if configPath != nil {
+		url = *configPath
+	}
+	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("download config: %w", err)
 	}

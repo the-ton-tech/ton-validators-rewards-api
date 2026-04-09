@@ -63,8 +63,9 @@ Query parameters:
 |---------------|-------|------------------------------------------------------------------|
 | `election_id` | int64 | Return the single round matching this election ID                |
 | `block`       | uint32| Find the round containing this masterchain block seqno           |
+| `unixtime`    | uint32| Unix timestamp (seconds). Looks up the masterchain block at this time and uses it as the anchor. |
 
-`election_id` and `block` are mutually exclusive. If neither is provided, uses the latest block.
+`election_id`, `block`, and `unixtime` are mutually exclusive. If none is provided, uses the latest block.
 
 Response:
 
@@ -96,8 +97,10 @@ Query parameters:
 |---------------|-------|------------------------------------------------------------------|
 | `election_id` | int64 | Election ID of the finished round                                |
 | `block`       | uint32| Masterchain block seqno within the finished round                |
+| `unixtime`    | uint32| Unix timestamp (seconds). Looks up the masterchain block at this time and uses it as the anchor. |
+| `shallow`     | flag  | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
 
-`election_id` and `block` are mutually exclusive. At least one is required.
+`election_id`, `block`, and `unixtime` are mutually exclusive. At least one is required.
 
 Response:
 
@@ -149,7 +152,9 @@ Query parameters:
 
 | Parameter    | Type   | Description                                      |
 |--------------|--------|--------------------------------------------------|
-| `seqno`      | uint32 | Masterchain block seqno (defaults to latest)     |
+| `seqno`      | uint32 | Masterchain block seqno (defaults to latest). Mutually exclusive with `unixtime`. |
+| `unixtime`   | uint32 | Unix timestamp (seconds). Looks up the masterchain block at this time. Mutually exclusive with `seqno`. |
+| `shallow`    | flag   | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
 
 Response:
 

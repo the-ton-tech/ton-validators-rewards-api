@@ -43,7 +43,7 @@ paths:
           in: query
           description: >
             Return the single round matching this election ID.
-            Mutually exclusive with `block`.
+            Mutually exclusive with `block` and `unixtime`.
           required: false
           schema:
             type: integer
@@ -53,7 +53,17 @@ paths:
           description: >
             Find the round containing this masterchain block seqno and return
             it plus up to `limit-1` older rounds. Mutually exclusive with
-            `election_id`.
+            `election_id` and `unixtime`.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+        - name: unixtime
+          in: query
+          description: >
+            Unix timestamp (seconds). Looks up the masterchain block at this
+            time and uses it as the anchor. Mutually exclusive with
+            `election_id` and `block`.
           required: false
           schema:
             type: integer
@@ -89,7 +99,8 @@ paths:
         - name: election_id
           in: query
           description: >
-            Election ID of the finished round. Mutually exclusive with `block`.
+            Election ID of the finished round. Mutually exclusive with
+            `block` and `unixtime`.
           required: false
           schema:
             type: integer
@@ -98,11 +109,33 @@ paths:
           in: query
           description: >
             Masterchain block seqno within the finished round.
-            Mutually exclusive with `election_id`.
+            Mutually exclusive with `election_id` and `unixtime`.
           required: false
           schema:
             type: integer
             format: uint32
+        - name: unixtime
+          in: query
+          description: >
+            Unix timestamp (seconds). Looks up the masterchain block at this
+            time and uses it as the anchor. Mutually exclusive with
+            `election_id` and `block`.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+        - name: shallow
+          in: query
+          description: >
+            Set to `1` to return only basic validator info (rank, pubkey,
+            effective_stake, weight, reward, pool). Skips pool type detection,
+            owner/validator addresses, nominator data, and returned-stake
+            lookup — significantly faster.
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
       responses:
         "200":
           description: Successful response
@@ -133,11 +166,34 @@ paths:
       parameters:
         - name: seqno
           in: query
-          description: Masterchain block seqno. Defaults to latest.
+          description: >
+            Masterchain block seqno. Defaults to latest.
+            Mutually exclusive with `unixtime`.
           required: false
           schema:
             type: integer
             format: uint32
+        - name: unixtime
+          in: query
+          description: >
+            Unix timestamp (seconds). Looks up the masterchain block at this
+            time and uses it as the anchor. Mutually exclusive with `seqno`.
+          required: false
+          schema:
+            type: integer
+            format: uint32
+        - name: shallow
+          in: query
+          description: >
+            Set to `1` to return only basic validator info (rank, pubkey,
+            effective_stake, weight, reward, pool). Skips pool type detection,
+            owner/validator addresses, nominator data, and returned-stake
+            lookup — significantly faster.
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
       responses:
         "200":
           description: Successful response
