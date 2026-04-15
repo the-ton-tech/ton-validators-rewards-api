@@ -136,6 +136,21 @@ paths:
             type: integer
             enum: [0, 1]
             default: 0
+        - name: pubkey
+          in: query
+          description: >
+            Lowercase hex validator pubkey (64 hex chars), repeatable
+            (?pubkey=a&pubkey=b). When set, only the listed validators
+            receive deep enrichment (pool type, owner/validator addresses,
+            nominator data, returned-stake lookup); all other validators are
+            still returned but with shallow fields only. Overrides `shallow`
+            for listed validators.
+          required: false
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
       responses:
         "200":
           description: Successful response
@@ -194,6 +209,21 @@ paths:
             type: integer
             enum: [0, 1]
             default: 0
+        - name: pubkey
+          in: query
+          description: >
+            Lowercase hex validator pubkey (64 hex chars), repeatable
+            (?pubkey=a&pubkey=b). When set, only the listed validators
+            receive deep enrichment (pool type, owner/validator addresses,
+            nominator data, returned-stake lookup); all other validators are
+            still returned but with shallow fields only. Overrides `shallow`
+            for listed validators.
+          required: false
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
       responses:
         "200":
           description: Successful response
@@ -314,6 +344,18 @@ components:
           $ref: "#/components/schemas/NanoTON"
         reward_per_block:
           $ref: "#/components/schemas/NanoTON"
+        prev_block_total_bonuses:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Elector's accumulated bonuses for the current round at the
+                previous masterchain block.
+        curr_block_total_bonuses:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Elector's accumulated bonuses for the current round at the
+                target masterchain block.
         validators:
           type: array
           items:
@@ -402,6 +444,13 @@ components:
           example: 0.15
         reward:
           $ref: "#/components/schemas/NanoTON"
+        curr_block_total_bonuses:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Nominator's share of the validator's curr_block_total_bonuses
+                after applying validator_reward_share. Only present on
+                /api/validators (per-block endpoint).
         effective_stake:
           $ref: "#/components/schemas/NanoTON"
         stake:
@@ -428,6 +477,13 @@ components:
           example: 0.004648
         reward:
           $ref: "#/components/schemas/NanoTON"
+        curr_block_total_bonuses:
+          allOf:
+            - $ref: "#/components/schemas/NanoTON"
+            - description: >
+                Validator's share of curr_block_total_bonuses, computed as
+                curr_block_total_bonuses * effective_stake / total effective
+                stake. Only present on /api/validators (per-block endpoint).
         pool:
           type: string
           description: Pool smart contract address (bounceable, base64url).

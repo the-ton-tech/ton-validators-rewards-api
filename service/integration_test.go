@@ -94,7 +94,7 @@ func TestFetchPerBlockRewardsMatchesSnapshots(t *testing.T) {
 			seqno := snap.Block.Seqno
 			out, err := svc.FetchRoundRewards(ctx, model.RoundRewardsQuery{
 				ElectionID: &snap.ElectionID,
-			}, false)
+			}, false, nil)
 			if err != nil {
 				t.Fatalf("FetchPerBlockRewards(seqno=%d): %v", seqno, err)
 			}
@@ -236,7 +236,7 @@ func TestTonscanElectionMatchesService(t *testing.T) {
 
 			out, err := svc.FetchRoundRewards(ctx, model.RoundRewardsQuery{
 				ElectionID: &d.ID,
-			}, false)
+			}, false, nil)
 			if err != nil {
 				t.Fatalf("FetchRoundRewards(election=%d): %v", d.ID, err)
 			}

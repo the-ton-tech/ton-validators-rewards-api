@@ -193,10 +193,16 @@ func findElection(elections []RawPastElection, electAt int64) *RawPastElection {
 // computeValidatorRewards computes per-validator rewards, sorts by stake, and
 // enriches each validator with pool data and nominator reward splits in parallel.
 // rewardPool is the total reward to distribute (bonuses for round rewards, rewardPerBlock for per-block).
-func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int, shallow bool) []model.ValidatorReward {
+// pubkeys, when non-nil, selects which validators receive deep enrichment even
+// when shallow is true. Non-matching validators are still included in the
+// output with shallow fields only.
+// bonusesPool, when non-nil, is used to compute a per-validator (and per-nominator)
+// share of the round's accumulated bonuses following the same split as reward.
+func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int, shallow bool, pubkeys map[string]struct{}, bonusesPool *big.Int) []model.ValidatorReward {
 	type rewardRow struct {
 		validatorRow
-		reward *big.Int
+		reward           *big.Int
+		currBlockBonuses *big.Int
 	}
 	rewardRows := make([]rewardRow, len(rows))
 	for i, row := range rows {
@@ -206,7 +212,15 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 		} else {
 			reward = new(big.Int)
 		}
-		rewardRows[i] = rewardRow{validatorRow: row, reward: reward}
+		var currBlockBonuses *big.Int
+		if bonusesPool != nil {
+			if totalTrueStake.Sign() > 0 {
+				currBlockBonuses = utils.MulDiv(bonusesPool, row.trueStake, totalTrueStake)
+			} else {
+				currBlockBonuses = new(big.Int)
+			}
+		}
+		rewardRows[i] = rewardRow{validatorRow: row, reward: reward, currBlockBonuses: currBlockBonuses}
 	}
 	sort.Slice(rewardRows, func(i, j int) bool { return rewardRows[i].trueStake.Cmp(rewardRows[j].trueStake) > 0 })
 
@@ -223,8 +237,19 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 				Reward:         &model.NTon{Int: row.reward},
 				Pool:           row.pool,
 			}
+			if row.currBlockBonuses != nil {
+				validatorRewards[i].CurrBlockTotalBonuses = &model.NTon{Int: row.currBlockBonuses}
+			}
 
-			if shallow || row.poolAddr == nil {
+			rowShallow := shallow
+			if len(pubkeys) > 0 {
+				if _, match := pubkeys[validatorRewards[i].Pubkey]; match {
+					rowShallow = false
+				} else {
+					rowShallow = true
+				}
+			}
+			if rowShallow || row.poolAddr == nil {
 				return nil
 			}
 
@@ -274,6 +299,17 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 			nominatorsReward := new(big.Int).Sub(totalValidatorReward, validatorSelfReward)
 			nominatorsTotalStake := info.pd.NominatorsAmount
 
+			// Same split applied to the per-validator share of curr_block_total_bonuses.
+			var nominatorsBonuses *big.Int
+			if row.currBlockBonuses != nil {
+				totalValidatorBonuses := row.currBlockBonuses
+				validatorSelfBonuses := utils.MulDiv(totalValidatorBonuses, rewardShare, tenThousand)
+				if validatorSelfBonuses.Cmp(totalValidatorBonuses) > 0 {
+					validatorSelfBonuses.Set(totalValidatorBonuses)
+				}
+				nominatorsBonuses = new(big.Int).Sub(totalValidatorBonuses, validatorSelfBonuses)
+			}
+
 			for _, n := range info.pd.Nominators {
 				addr := ton.AccountID{Workchain: 0, Address: tlb.Bits256(n.Address)}
 				nominatorStake := new(big.Int).SetUint64(n.Amount)
@@ -291,13 +327,18 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 
 				nominatorEffectiveStake := utils.MulDiv(nominatorStake, row.trueStake, totalStake)
 
-				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, model.NominatorReward{
+				nr := model.NominatorReward{
 					Address:        addr.ToHuman(true, false),
 					Weight:         utils.InaccurateDivFloat(nominatorStake, nominatorsTotalStake),
 					Reward:         &model.NTon{Int: nominatorReward},
 					EffectiveStake: &model.NTon{Int: nominatorEffectiveStake},
 					Stake:          &model.NTon{Int: nominatorStake},
-				})
+				}
+				if nominatorsBonuses != nil {
+					nominatorBonuses := utils.MulDiv(nominatorsBonuses, nominatorStake, nominatorsTotalStake)
+					nr.CurrBlockTotalBonuses = &model.NTon{Int: nominatorBonuses}
+				}
+				validatorRewards[i].Nominators = append(validatorRewards[i].Nominators, nr)
 			}
 
 			return nil

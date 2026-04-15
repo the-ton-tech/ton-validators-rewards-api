@@ -14,7 +14,7 @@ import (
 )
 
 // FetchPerBlockRewards fetches validator statistics for the given seqno (or latest if nil).
-func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool) (*model.Output, error) {
+func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool, pubkeys map[string]struct{}) (*model.Output, error) {
 	client := s.currentClient()
 	ctx = WithLoaders(ctx, client)
 
@@ -204,6 +204,6 @@ func (s *Service) FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixt
 	out.TotalStake = &model.NTon{Int: totalTrueStake}
 	log.Printf("total true stake (active validators): %.2f TON", new(big.Float).Quo(new(big.Float).SetInt(totalTrueStake), big.NewFloat(1e9)))
 
-	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock, shallow)
+	out.Validators = computeValidatorRewards(ctx, pinned, rows, totalTrueStake, rewardPerBlock, shallow, pubkeys, currBlockBonuses)
 	return &out, nil
 }

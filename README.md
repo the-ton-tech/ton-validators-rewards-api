@@ -99,6 +99,7 @@ Query parameters:
 | `block`       | uint32| Masterchain block seqno within the finished round                |
 | `unixtime`    | uint32| Unix timestamp (seconds). Looks up the masterchain block at this time and uses it as the anchor. |
 | `shallow`     | flag  | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
+| `pubkey`      | repeated | Lowercase hex validator pubkey (64 chars), repeatable (`?pubkey=a&pubkey=b`). When set, only the listed validators are deep-enriched; all others are returned with shallow fields regardless of `shallow`. |
 
 `election_id`, `block`, and `unixtime` are mutually exclusive. At least one is required.
 
@@ -155,6 +156,7 @@ Query parameters:
 | `seqno`      | uint32 | Masterchain block seqno (defaults to latest). Mutually exclusive with `unixtime`. |
 | `unixtime`   | uint32 | Unix timestamp (seconds). Looks up the masterchain block at this time. Mutually exclusive with `seqno`. |
 | `shallow`    | flag   | Set `shallow=1` to return only basic validator info (rank, pubkey, effective_stake, weight, reward, pool). Skips pool type detection, owner/validator addresses, nominator data, and returned-stake lookup — significantly faster. |
+| `pubkey`     | repeated | Lowercase hex validator pubkey (64 chars), repeatable (`?pubkey=a&pubkey=b`). When set, only the listed validators are deep-enriched; all others are returned with shallow fields regardless of `shallow`. |
 
 Response:
 
@@ -172,6 +174,8 @@ Response:
   "elector_balance": "966674188286983322",
   "total_stake": "457752122739238021",
   "reward_per_block": "2928989965",
+  "prev_block_total_bonuses": "75324846742804",
+  "curr_block_total_bonuses": "75327775732769",
   "validators": [
     {
       "rank": 1,
@@ -179,6 +183,7 @@ Response:
       "effective_stake": "2127654606060000",
       "weight": 0.004648,
       "reward": "13614090",
+      "curr_block_total_bonuses": "350123456789",
       "total_stake": "2376902585342169",
       "pool": "Ef_bmCmMPsrHKOC4hV8foWBs2TEUAggQ1Wfe6EAqjrI3sGNI",
       "pool_type": "nominator-pool-v1.0",
@@ -193,6 +198,7 @@ Response:
           "address": "EQAqR4RYauq7p3jqKGnD-eSYVDoOCak9g8ZsSNVHI9fevCzB",
           "weight": 1.0,
           "reward": "13614090",
+          "curr_block_total_bonuses": "245086419752",
           "effective_stake": "2127654606060000",
           "stake": "2176902585342169"
         }
@@ -214,6 +220,8 @@ Response:
 | `elector_balance` | Elector contract balance (nanoTON) |
 | `total_stake` | Sum of all active validators' effective stakes (nanoTON) |
 | `reward_per_block` | Total fees collected in the target block (nanoTON) |
+| `prev_block_total_bonuses` | Elector's accumulated bonuses for the current round at the previous masterchain block (nanoTON) |
+| `curr_block_total_bonuses` | Elector's accumulated bonuses for the current round at the target masterchain block (nanoTON) |
 
 #### Validator fields
 
@@ -224,6 +232,7 @@ Response:
 | `effective_stake` | Validator's true stake locked in the Elector contract (nanoTON) |
 | `weight` | Fraction of the total effective stake held by this validator (0–1) |
 | `reward` | Estimated reward this validator earns per masterchain block (nanoTON) |
+| `curr_block_total_bonuses` | Validator's share of `curr_block_total_bonuses`, computed as `curr_block_total_bonuses * effective_stake / total effective stake` (nanoTON) |
 | `pool` | Pool smart contract address (bounceable, base64url) |
 | `validator_address` | Validator's wallet address (the one that controls the node) |
 | `owner_address` | The single owner who deposited funds. Only present for single-nominator pools |
@@ -242,6 +251,7 @@ Response:
 | `address` | Nominator's wallet address (bounceable, base64url) |
 | `weight` | Nominator's share of the total nominators' deposit (0–1) |
 | `reward` | Estimated per-block reward after the validator's cut (nanoTON) |
+| `curr_block_total_bonuses` | Nominator's share of the validator's `curr_block_total_bonuses` after applying `validator_reward_share` (nanoTON) |
 | `effective_stake` | Nominator's proportional share of the effective stake locked in the Elector (nanoTON) |
 | `stake` | Nominator's raw deposit in the pool contract (nanoTON) |
 
