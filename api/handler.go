@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/the-ton-tech/ton-validators-rewards-api/model"
@@ -14,9 +15,9 @@ import (
 
 // ValidatorService describes the methods the API layer needs from the service layer.
 type ValidatorService interface {
-	FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool) (*model.Output, error)
+	FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool, pubkeys map[string]bool) (*model.Output, error)
 	FetchValidationRounds(ctx context.Context, query model.RoundsQuery) (*model.ValidationRoundsOutput, error)
-	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool) (*model.RoundRewardsOutput, error)
+	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool, pubkeys map[string]bool) (*model.RoundRewardsOutput, error)
 }
 
 // Handler holds dependencies for HTTP handlers.
@@ -49,8 +50,13 @@ func (h *Service) HandleValidators(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shallow := r.URL.Query().Get("shallow") == "1"
+	pubkeys, err := parsePubkeys(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
-	out, err := h.svc.FetchPerBlockRewards(ctx, seqno, unixtime, shallow)
+	out, err := h.svc.FetchPerBlockRewards(ctx, seqno, unixtime, shallow, pubkeys)
 	if err != nil {
 		log.Printf("FetchPerBlockRewards error: %v", err)
 		writeError(w, err.Error(), http.StatusInternalServerError)
@@ -140,6 +146,11 @@ func (h *Service) HandleRoundRewards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shallow := r.URL.Query().Get("shallow") == "1"
+	pubkeys, err := parsePubkeys(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var q model.RoundRewardsQuery
 
 	if hasElection {
@@ -171,7 +182,7 @@ func (h *Service) HandleRoundRewards(w http.ResponseWriter, r *http.Request) {
 		q.Unixtime = &u
 	}
 
-	out, err := h.svc.FetchRoundRewards(ctx, q, shallow)
+	out, err := h.svc.FetchRoundRewards(ctx, q, shallow, pubkeys)
 	if err != nil {
 		log.Printf("FetchRoundRewards error: %v", err)
 		writeError(w, err.Error(), http.StatusInternalServerError)
@@ -217,6 +228,35 @@ func parseUnixtime(r *http.Request) (*uint32, error) {
 	}
 	u := uint32(v)
 	return &u, nil
+}
+
+// parsePubkeys extracts the optional pubkey query parameter. Accepts repeated
+// occurrences (?pubkey=a&pubkey=b). Each value must be 64 lowercase hex chars.
+func parsePubkeys(r *http.Request) (map[string]bool, error) {
+	values := r.URL.Query()["pubkey"]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	set := make(map[string]bool)
+	for _, v := range values {
+		p := strings.ToLower(strings.TrimSpace(v))
+		if p == "" {
+			continue
+		}
+		if len(p) != 64 {
+			return nil, fmt.Errorf("invalid pubkey %q: expected 64 hex chars", p)
+		}
+		for _, c := range p {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				return nil, fmt.Errorf("invalid pubkey %q: non-hex character", p)
+			}
+		}
+		set[p] = true
+	}
+	if len(set) == 0 {
+		return nil, nil
+	}
+	return set, nil
 }
 
 // countTrue returns how many of the given booleans are true.
