@@ -198,7 +198,7 @@ func findElection(elections []RawPastElection, electAt int64) *RawPastElection {
 // output with shallow fields only.
 // bonusesPool, when non-nil, is used to compute a per-validator (and per-nominator)
 // share of the round's accumulated bonuses following the same split as reward.
-func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int, shallow bool, pubkeys map[string]struct{}, bonusesPool *big.Int) []model.ValidatorReward {
+func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []validatorRow, totalTrueStake, rewardPool *big.Int, shallow bool, pubkeys map[string]bool, bonusesPool *big.Int) []model.ValidatorReward {
 	type rewardRow struct {
 		validatorRow
 		reward           *big.Int
@@ -242,12 +242,8 @@ func computeValidatorRewards(ctx context.Context, pinned LiteClient, rows []vali
 			}
 
 			rowShallow := shallow
-			if len(pubkeys) > 0 {
-				if _, match := pubkeys[validatorRewards[i].Pubkey]; match {
-					rowShallow = false
-				} else {
-					rowShallow = true
-				}
+			if pubkeys != nil {
+				rowShallow = !pubkeys[validatorRewards[i].Pubkey]
 			}
 			if rowShallow || row.poolAddr == nil {
 				return nil

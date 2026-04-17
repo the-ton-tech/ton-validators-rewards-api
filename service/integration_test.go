@@ -144,6 +144,132 @@ func TestFetchPerBlockRewardsMatchesSnapshots(t *testing.T) {
 			if wrongCount > 0 {
 				t.Fatalf("wrong count: %d", wrongCount)
 			}
+
+			// Pubkey filter: re-run the same round with shallow=true and a
+			// small pubkey allowlist. Selected validators must still receive
+			// deep enrichment (TotalStake populated), all others must stay
+			// shallow. The full call above is the oracle for which pubkeys
+			// can actually deep-enrich (those with TotalStake set).
+			var selectedPubkeys []string
+			for _, v := range out.Validators {
+				if v.TotalStake != nil {
+					selectedPubkeys = append(selectedPubkeys, v.Pubkey)
+					if len(selectedPubkeys) == 2 {
+						break
+					}
+				}
+			}
+			if len(selectedPubkeys) == 0 {
+				t.Logf("no deep-enriched validators available to exercise pubkey filter")
+			} else {
+				selected := make(map[string]bool, len(selectedPubkeys))
+				for _, p := range selectedPubkeys {
+					selected[p] = true
+				}
+
+				fctx, fcancel := context.WithTimeout(context.Background(), 120*time.Second)
+				defer fcancel()
+				filtered, err := svc.FetchRoundRewards(fctx, model.RoundRewardsQuery{
+					ElectionID: &snap.ElectionID,
+				}, true, selected)
+				if err != nil {
+					t.Fatalf("FetchRoundRewards(pubkeys=%v): %v", selectedPubkeys, err)
+				}
+
+				if len(filtered.Validators) != len(out.Validators) {
+					t.Errorf("pubkey filter changed validator count: got %d, want %d",
+						len(filtered.Validators), len(out.Validators))
+				}
+
+				filteredByPubkey := make(map[string]*model.ValidatorReward, len(filtered.Validators))
+				for i := range filtered.Validators {
+					filteredByPubkey[filtered.Validators[i].Pubkey] = &filtered.Validators[i]
+				}
+
+				// Every selected pubkey must appear with deep-enrichment fields.
+				for _, p := range selectedPubkeys {
+					fv, ok := filteredByPubkey[p]
+					if !ok {
+						t.Errorf("selected pubkey %s: missing from filtered output", p)
+						continue
+					}
+					if fv.TotalStake == nil {
+						t.Errorf("selected pubkey %s: TotalStake nil; want deep enrichment despite shallow=true", p)
+					}
+				}
+
+				// Non-selected validators must remain shallow even though the
+				// oracle call deep-enriched them.
+				for _, fv := range filtered.Validators {
+					if _, isSelected := selected[fv.Pubkey]; isSelected {
+						continue
+					}
+					if fv.TotalStake != nil {
+						t.Errorf("unselected pubkey %s: TotalStake = %s; expected shallow", fv.Pubkey, fv.TotalStake.Int)
+					}
+					if fv.PoolType != "" {
+						t.Errorf("unselected pubkey %s: PoolType = %q; expected shallow", fv.Pubkey, fv.PoolType)
+					}
+					if fv.NominatorsCount != 0 {
+						t.Errorf("unselected pubkey %s: NominatorsCount = %d; expected shallow", fv.Pubkey, fv.NominatorsCount)
+					}
+					if len(fv.Nominators) != 0 {
+						t.Errorf("unselected pubkey %s: %d nominators returned; expected shallow", fv.Pubkey, len(fv.Nominators))
+					}
+				}
+			}
+
+			// Per-block bonuses: call FetchPerBlockRewards at the snapshot
+			// seqno and verify the new prev/curr_block_total_bonuses fields
+			// plus the per-validator bonus split invariant.
+			pbCtx, pbCancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer pbCancel()
+			pb, err := svc.FetchPerBlockRewards(pbCtx, &seqno, nil, true, nil)
+			if err != nil {
+				t.Fatalf("FetchPerBlockRewards(seqno=%d): %v", seqno, err)
+			}
+			if pb.PrevBlockTotalBonuses == nil || pb.PrevBlockTotalBonuses.Int == nil {
+				t.Errorf("prev_block_total_bonuses missing from per-block response")
+			}
+			if pb.CurrBlockTotalBonuses == nil || pb.CurrBlockTotalBonuses.Int == nil {
+				t.Fatalf("curr_block_total_bonuses missing from per-block response")
+			}
+			if pb.CurrBlockTotalBonuses.Sign() < 0 || pb.PrevBlockTotalBonuses.Sign() < 0 {
+				t.Errorf("bonuses must be non-negative: prev=%s curr=%s", pb.PrevBlockTotalBonuses.Int, pb.CurrBlockTotalBonuses.Int)
+			}
+			if pb.CurrBlockTotalBonuses.Cmp(pb.PrevBlockTotalBonuses.Int) < 0 {
+				t.Errorf("curr_block_total_bonuses (%s) < prev_block_total_bonuses (%s); bonuses are monotonic within a round",
+					pb.CurrBlockTotalBonuses.Int, pb.PrevBlockTotalBonuses.Int)
+			}
+
+			// Per-validator curr_block_total_bonuses = curr * stake / total_stake.
+			// Only meaningful when the elector has accumulated bonuses at this block.
+			if pb.CurrBlockTotalBonuses.Sign() > 0 && pb.TotalStake != nil && pb.TotalStake.Sign() > 0 {
+				sum := new(big.Int)
+				for _, v := range pb.Validators {
+					if v.CurrBlockTotalBonuses == nil {
+						t.Errorf("validator %s: curr_block_total_bonuses missing in per-block response", v.Pubkey)
+						continue
+					}
+					want := new(big.Int).Mul(pb.CurrBlockTotalBonuses.Int, v.EffectiveStake.Int)
+					want.Quo(want, pb.TotalStake.Int)
+					if v.CurrBlockTotalBonuses.Cmp(want) != 0 {
+						t.Errorf("validator %s: curr_block_total_bonuses = %s; want %s (curr*stake/total)",
+							v.Pubkey, v.CurrBlockTotalBonuses.Int, want)
+					}
+					sum.Add(sum, v.CurrBlockTotalBonuses.Int)
+				}
+				// Sum of truncated splits is at most top-level value and at
+				// least top-level minus len(validators) (each MulDiv loses <1).
+				diff := new(big.Int).Sub(pb.CurrBlockTotalBonuses.Int, sum)
+				if diff.Sign() < 0 {
+					t.Errorf("sum of per-validator bonuses (%s) exceeds total (%s)", sum, pb.CurrBlockTotalBonuses.Int)
+				}
+				if diff.Cmp(big.NewInt(int64(len(pb.Validators)))) > 0 {
+					t.Errorf("sum of per-validator bonuses (%s) trails total (%s) by more than %d (rounding tolerance)",
+						sum, pb.CurrBlockTotalBonuses.Int, len(pb.Validators))
+				}
+			}
 		})
 	}
 

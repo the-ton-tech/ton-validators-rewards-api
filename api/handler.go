@@ -15,9 +15,9 @@ import (
 
 // ValidatorService describes the methods the API layer needs from the service layer.
 type ValidatorService interface {
-	FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool, pubkeys map[string]struct{}) (*model.Output, error)
+	FetchPerBlockRewards(ctx context.Context, seqno *uint32, unixtime *uint32, shallow bool, pubkeys map[string]bool) (*model.Output, error)
 	FetchValidationRounds(ctx context.Context, query model.RoundsQuery) (*model.ValidationRoundsOutput, error)
-	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool, pubkeys map[string]struct{}) (*model.RoundRewardsOutput, error)
+	FetchRoundRewards(ctx context.Context, query model.RoundRewardsQuery, shallow bool, pubkeys map[string]bool) (*model.RoundRewardsOutput, error)
 }
 
 // Handler holds dependencies for HTTP handlers.
@@ -232,12 +232,12 @@ func parseUnixtime(r *http.Request) (*uint32, error) {
 
 // parsePubkeys extracts the optional pubkey query parameter. Accepts repeated
 // occurrences (?pubkey=a&pubkey=b). Each value must be 64 lowercase hex chars.
-func parsePubkeys(r *http.Request) (map[string]struct{}, error) {
+func parsePubkeys(r *http.Request) (map[string]bool, error) {
 	values := r.URL.Query()["pubkey"]
 	if len(values) == 0 {
 		return nil, nil
 	}
-	set := make(map[string]struct{})
+	set := make(map[string]bool)
 	for _, v := range values {
 		p := strings.ToLower(strings.TrimSpace(v))
 		if p == "" {
@@ -251,7 +251,7 @@ func parsePubkeys(r *http.Request) (map[string]struct{}, error) {
 				return nil, fmt.Errorf("invalid pubkey %q: non-hex character", p)
 			}
 		}
-		set[p] = struct{}{}
+		set[p] = true
 	}
 	if len(set) == 0 {
 		return nil, nil
